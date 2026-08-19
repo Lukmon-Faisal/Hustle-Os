@@ -7,7 +7,7 @@ import type { PaymentMethod } from '../types'
 type Tab = 'sales' | 'expenses' | 'invoices' | 'inventory' | 'customers'
 
 export function Activity() {
-  const { t, lang, data, goTo } = useApp()
+  const { t, lang, data, goTo, addSale, addExpense, error } = useApp()
   const [tab, setTab] = useState<Tab>('sales')
   const [showAddSale, setShowAddSale] = useState(false)
   const [showAddExpense, setShowAddExpense] = useState(false)
@@ -34,30 +34,17 @@ export function Activity() {
 
   if (!data) return null
 
-  const addSale = () => {
+  const submitSale = () => {
     if (!saleProduct || !saleAmount) return
-    data.sales.unshift({
-      id: `sale-manual-${Date.now()}`,
-      date: new Date().toISOString().slice(0, 10),
-      product: saleProduct,
-      quantity: 1,
-      amount: Number(saleAmount),
-      paymentMethod: salePayment,
-      customerId: 'walk-in',
-    })
+    void addSale({ product: saleProduct, amount: Number(saleAmount), paymentMethod: salePayment })
     setSaleProduct('')
     setSaleAmount('')
     setShowAddSale(false)
   }
 
-  const addExpense = () => {
+  const submitExpense = () => {
     if (!expCategory || !expAmount) return
-    data.expenses.unshift({
-      id: `exp-manual-${Date.now()}`,
-      date: new Date().toISOString().slice(0, 10),
-      category: expCategory,
-      amount: Number(expAmount),
-    })
+    void addExpense({ category: expCategory, amount: Number(expAmount) })
     setExpCategory('')
     setExpAmount('')
     setShowAddExpense(false)
@@ -66,6 +53,7 @@ export function Activity() {
   return (
     <div className="screen stack">
       <h1>{t('activityTitle')}</h1>
+      {error && <p style={{ color: 'crimson', fontSize: 13 }}>{error}</p>}
 
       <div className="tab-row">
         {(['sales', 'expenses', 'invoices', 'inventory', 'customers'] as Tab[]).map((tb) => (
@@ -99,7 +87,7 @@ export function Activity() {
                 <option value="pos">POS</option>
                 <option value="credit">Credit</option>
               </select>
-              <button className="btn-primary" onClick={addSale}>{t('continueBtn')}</button>
+              <button className="btn-primary" onClick={submitSale}>{t('continueBtn')}</button>
             </div>
           )}
           {recentSales.length === 0 ? (
@@ -127,7 +115,7 @@ export function Activity() {
             <div className="card stack">
               <input className="input-field" placeholder="Category" value={expCategory} onChange={(e) => setExpCategory(e.target.value)} />
               <input className="input-field" type="number" placeholder="Amount (₦)" value={expAmount} onChange={(e) => setExpAmount(e.target.value)} />
-              <button className="btn-primary" onClick={addExpense}>{t('continueBtn')}</button>
+              <button className="btn-primary" onClick={submitExpense}>{t('continueBtn')}</button>
             </div>
           )}
           <div className="stack" style={{ gap: 8 }}>

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useApp } from '../context/AppContext'
 
 export function BusinessSetup() {
-  const { t, setCustomBusiness, loadDemo } = useApp()
+  const { t, setCustomBusiness, loadDemo, loading, error } = useApp()
   const [name, setName] = useState('')
   const [type, setType] = useState('')
   const [location, setLocation] = useState('')
@@ -13,7 +13,7 @@ export function BusinessSetup() {
 
   const submit = () => {
     if (!canContinue) return
-    setCustomBusiness({
+    void setCustomBusiness({
       name: name.trim(),
       type: type.trim(),
       location: location.trim() || 'Nigeria',
@@ -31,6 +31,8 @@ export function BusinessSetup() {
         <div className="progress-fill" style={{ width: '80%' }} />
       </div>
       <h1>{t('businessSetupTitle')}</h1>
+      {loading && <p style={{ fontSize: 13, color: 'var(--grey)' }}>Saving to server…</p>}
+      {error && <p style={{ color: 'crimson', fontSize: 13 }}>{error}</p>}
 
       <div className="stack" style={{ marginTop: 8 }}>
         <div>
