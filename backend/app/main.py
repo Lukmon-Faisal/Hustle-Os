@@ -37,9 +37,7 @@ def on_startup():
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
- @app.get("/")
-      def root():
-          return {"service": "Hustle OS API", "version": "0.2.0", "docs": "/docs"}
+
 
 app.include_router(businesses.router)
 app.include_router(sales.router)
