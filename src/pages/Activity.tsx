@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react'
 import { useApp } from '../context/AppContext'
 import { formatNaira } from '../services/analytics'
 import { EmptyState } from '../components/EmptyState'
+import { TypeOrTalk } from '../components/TypeOrTalk'
+import type { ParsedTransaction } from '../services/api'
 import type { PaymentMethod } from '../types'
 
 type Tab = 'sales' | 'expenses' | 'invoices' | 'inventory' | 'customers'
@@ -14,6 +16,7 @@ export function Activity() {
 
   const [saleProduct, setSaleProduct] = useState('')
   const [saleAmount, setSaleAmount] = useState('')
+  const [saleQty, setSaleQty] = useState('1')
   const [salePayment, setSalePayment] = useState<PaymentMethod>('cash')
 
   const [expCategory, setExpCategory] = useState('')
@@ -36,9 +39,15 @@ export function Activity() {
 
   const submitSale = () => {
     if (!saleProduct || !saleAmount) return
-    void addSale({ product: saleProduct, amount: Number(saleAmount), paymentMethod: salePayment })
+    void addSale({
+      product: saleProduct,
+      amount: Number(saleAmount),
+      quantity: Number(saleQty) || 1,
+      paymentMethod: salePayment,
+    })
     setSaleProduct('')
     setSaleAmount('')
+    setSaleQty('1')
     setShowAddSale(false)
   }
 
@@ -48,6 +57,28 @@ export function Activity() {
     setExpCategory('')
     setExpAmount('')
     setShowAddExpense(false)
+  }
+
+  /**
+   * Pre-fill only — deliberately never submits. The vendor sees the values land
+   * in the form and presses Save themselves, so a misheard amount is caught by
+   * a human before it becomes a row. The parse also decides which form to open,
+   * so saying "I buy rice for 5000" while on the Sales tab still routes to
+   * Expenses rather than booking revenue.
+   */
+  const applyParsed = (p: ParsedTransaction) => {
+    if (p.type === 'expense') {
+      setExpCategory(p.item_name)
+      setExpAmount(p.amount ? String(p.amount) : '')
+      setShowAddExpense(true)
+      setTab('expenses')
+    } else {
+      setSaleProduct(p.item_name)
+      setSaleAmount(p.amount ? String(p.amount) : '')
+      setSaleQty(String(p.quantity || 1))
+      setShowAddSale(true)
+      setTab('sales')
+    }
   }
 
   return (
@@ -74,6 +105,11 @@ export function Activity() {
         ))}
       </div>
 
+      {/* Kept outside the per-tab blocks so switching between Sales and
+          Expenses — including the switch a parse itself triggers — doesn't
+          unmount it and wipe the confirmation message. */}
+      {(tab === 'sales' || tab === 'expenses') && <TypeOrTalk onParsed={applyParsed} />}
+
       {tab === 'sales' && (
         <div className="stack">
           <button className="btn-secondary" onClick={() => setShowAddSale((v) => !v)}>{t('addSale')}</button>
@@ -81,6 +117,7 @@ export function Activity() {
             <div className="card stack">
               <input className="input-field" placeholder={lang === 'pcm' ? 'Product' : 'Product'} value={saleProduct} onChange={(e) => setSaleProduct(e.target.value)} />
               <input className="input-field" type="number" placeholder="Amount (₦)" value={saleAmount} onChange={(e) => setSaleAmount(e.target.value)} />
+              <input className="input-field" type="number" min="1" placeholder={lang === 'pcm' ? 'How many' : 'Quantity'} value={saleQty} onChange={(e) => setSaleQty(e.target.value)} />
               <select className="input-field" value={salePayment} onChange={(e) => setSalePayment(e.target.value as PaymentMethod)}>
                 <option value="cash">Cash</option>
                 <option value="transfer">Transfer</option>

@@ -544,6 +544,29 @@ p { margin: 0; line-height: 1.5; }
 
 a { color: var(--purple-deep); }
 
+/* Inline busy indicator. Always paired with text, because the reduced-motion
+   rule below freezes the animation and a still ring says nothing on its own. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--lavender);
+  border-top-color: var(--purple-mid);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Mic button while the Web Speech API is actively listening. */
+.mic-live {
+  border-color: var(--red);
+  color: var(--red);
+}
+
 :focus-visible {
   outline: 2px solid var(--purple-mid);
   outline-offset: 2px;

@@ -116,6 +116,29 @@ NARRATE_SCHEMA = {
     "additionalProperties": False,
 }
 
+# --- /parse-transaction configuration --------------------------------------
+PARSE_MAX_TOKENS = 512
+
+PARSE_SYSTEM = (
+    "You are an entity extraction engine for a Nigerian business app. The user will "
+    "provide a natural language string, often in Nigerian Pidgin, describing a business "
+    "transaction. Extract the data and return ONLY raw JSON matching this schema exactly: "
+    "{ 'type': 'sale' or 'expense', 'item_name': string, 'amount': number, "
+    "'quantity': number (default to 1) }. Do not include markdown or backticks."
+)
+
+PARSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "type": {"type": "string", "enum": ["sale", "expense"]},
+        "item_name": {"type": "string"},
+        "amount": {"type": "number"},
+        "quantity": {"type": "number"},
+    },
+    "required": ["type", "item_name", "amount", "quantity"],
+    "additionalProperties": False,
+}
+
 def _items(db,bid): return db.query(InventoryItem).filter(InventoryItem.business_id==bid).all()
 def _suppliers(db,bid): return db.query(Supplier).filter(Supplier.business_id==bid).all()
 
@@ -441,28 +464,25 @@ def _strip_fence(t):
         t=re.sub(r"\s*```$","",t)
     return t.strip()
 
-def answer(db,bid,question):
+def _llm_json(system,user_content,schema,max_tokens,purpose):
+    """One Claude call constrained to `schema`, returning parsed JSON.
+
+    Shared by the user-initiated endpoints (/ask, /parse-transaction). These
+    surface failures as HTTP status codes rather than degrading quietly: someone
+    is waiting on this specific answer and can act on the message. Insight
+    narration takes the opposite approach — see _narrate."""
     api_key=os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured on the server.")
-
-    context=ask_context(db,bid)
-    prompt=(
-        "Here is this vendor's financial data for the last 30 days as JSON:\n\n"
-        f"{json.dumps(context,ensure_ascii=False,indent=2)}\n\n"
-        f"The vendor asks: {question}\n\n"
-        "Answer using only the figures above. If the data cannot answer the question, "
-        "say so plainly in the 'fact' field instead of guessing."
-    )
 
     client=anthropic.Anthropic(api_key=api_key)
     try:
         resp=client.messages.create(
             model=ASK_MODEL,
-            max_tokens=ASK_MAX_TOKENS,
-            system=ASK_SYSTEM,
-            messages=[{"role":"user","content":prompt}],
-            output_config={"format":{"type":"json_schema","schema":ASK_SCHEMA}},
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role":"user","content":user_content}],
+            output_config={"format":{"type":"json_schema","schema":schema}},
         )
     except anthropic.AuthenticationError:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY was rejected by the Claude API.")
@@ -477,9 +497,20 @@ def answer(db,bid,question):
 
     text=next((b.text for b in resp.content if b.type=="text"),"")
     try:
-        data=json.loads(_strip_fence(text))
+        return json.loads(_strip_fence(text))
     except json.JSONDecodeError:
-        raise HTTPException(status_code=502, detail="The AI analyst returned a response that was not valid JSON.")
+        raise HTTPException(status_code=502, detail=f"The AI returned a response that was not valid JSON ({purpose}).")
+
+def answer(db,bid,question):
+    context=ask_context(db,bid)
+    prompt=(
+        "Here is this vendor's financial data for the last 30 days as JSON:\n\n"
+        f"{json.dumps(context,ensure_ascii=False,indent=2)}\n\n"
+        f"The vendor asks: {question}\n\n"
+        "Answer using only the figures above. If the data cannot answer the question, "
+        "say so plainly in the 'fact' field instead of guessing."
+    )
+    data=_llm_json(ASK_SYSTEM,prompt,ASK_SCHEMA,ASK_MAX_TOKENS,"chat answer")
 
     fact=str(data.get("fact") or "").strip()
     inference=str(data.get("inference") or "").strip()
@@ -497,4 +528,34 @@ def answer(db,bid,question):
       "fact":fact,
       "inference":inference,
       "recommendation":recommendation,
+    }
+
+def parse_transaction(text):
+    """Extract a transaction from a spoken or typed phrase.
+
+    Writes nothing — the client pre-fills its form with this and the vendor still
+    presses Save. Values are coerced and clamped here rather than trusted raw,
+    because these land in money fields: a negative amount or a zero quantity
+    would be a bad row even if the JSON shape was valid."""
+    phrase=(text or "").strip()
+    if not phrase:
+        raise HTTPException(status_code=422, detail="Nothing to parse — say or type the transaction first.")
+
+    data=_llm_json(PARSE_SYSTEM,phrase,PARSE_SCHEMA,PARSE_MAX_TOKENS,"transaction parse")
+
+    kind=data.get("type")
+    if kind not in ("sale","expense"):
+        raise HTTPException(status_code=502, detail="Could not tell whether that was a sale or an expense. Try rephrasing.")
+
+    try:
+        amount=max(0.0,round(float(data.get("amount") or 0),2))
+        quantity=max(1,int(round(float(data.get("quantity") or 1))))
+    except (TypeError,ValueError):
+        raise HTTPException(status_code=502, detail="The extracted amount or quantity was not a number.")
+
+    return {
+      "type":kind,
+      "item_name":str(data.get("item_name") or "").strip(),
+      "amount":amount,
+      "quantity":quantity,
     }

@@ -14,12 +14,16 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from app.db import get_db
 from app.schemas.passport import BusinessPassportRead
+from app.schemas.transaction import ParsedTransactionRead
 from app.services import ai_service
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["AI"])
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
+
+class ParseTransactionRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
 
 @router.get("/health")
 def health(business_id: uuid.UUID, db: Session = Depends(get_db)):
@@ -50,3 +54,10 @@ def passport(business_id: uuid.UUID, db: Session = Depends(get_db)):
 def ask(business_id: uuid.UUID, payload: AskRequest, db: Session = Depends(get_db)):
     get_business_or_404(business_id, db)
     return ai_service.answer(db,business_id,payload.question)
+
+@router.post("/parse-transaction", response_model=ParsedTransactionRead)
+def parse_transaction(business_id: uuid.UUID, payload: ParseTransactionRequest, db: Session = Depends(get_db)):
+    """Extraction only — this writes nothing. The client pre-fills its quick-add
+    form from the result and the vendor confirms with the existing Save button."""
+    get_business_or_404(business_id, db)
+    return ai_service.parse_transaction(payload.text)

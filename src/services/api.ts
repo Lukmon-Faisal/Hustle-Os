@@ -373,3 +373,31 @@ export async function askQuestion(businessId: string, question: string): Promise
     body: JSON.stringify({ question }),
   })
 }
+
+/**
+ * An extraction result, not a saved record — nothing is written server-side.
+ * Field names are the backend's, which mirrors the extraction schema.
+ */
+export interface ParsedTransaction {
+  type: 'sale' | 'expense'
+  item_name: string
+  amount: number
+  quantity: number
+}
+
+interface WireParsedTransaction extends Omit<ParsedTransaction, 'amount' | 'quantity'> {
+  amount: string | number
+  quantity: string | number
+}
+
+/** businessId is the backend's UUID string, not a numeric id. */
+export async function parseTransaction(
+  businessId: string,
+  text: string,
+): Promise<ParsedTransaction> {
+  const p = await request<WireParsedTransaction>(`/businesses/${businessId}/parse-transaction`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
+  return { ...p, amount: num(p.amount), quantity: num(p.quantity) }
+}
