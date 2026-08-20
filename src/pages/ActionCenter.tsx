@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 import { useApp } from '../context/AppContext'
-import { generateActionPlan } from '../services/aiService'
+import { DemoAiNotice, ErrorCard, LoadingCard } from '../components/AsyncStates'
+import { useApiResource } from '../hooks/useApiResource'
+import { fetchActions } from '../services/api'
 import type { ActionItem } from '../types'
 
 const PRIORITY_LABEL: Record<ActionItem['priority'], { en: string; pcm: string; cls: string }> = {
@@ -10,8 +12,13 @@ const PRIORITY_LABEL: Record<ActionItem['priority'], { en: string; pcm: string; 
 }
 
 export function ActionCenter() {
-  const { t, lang, data } = useApp()
-  const actions = useMemo(() => (data ? generateActionPlan(data) : []), [data])
+  const { t, lang, data, businessId } = useApp()
+
+  const loader = useMemo(
+    () => (businessId ? () => fetchActions(businessId) : null),
+    [businessId],
+  )
+  const { data: actions, loading, error, reload } = useApiResource(loader)
 
   if (!data) return null
 
@@ -19,7 +26,13 @@ export function ActionCenter() {
     <div className="screen stack">
       <h1>{t('actionCenterTitle')}</h1>
 
-      {actions.length === 0 ? (
+      {!businessId ? (
+        <DemoAiNotice />
+      ) : loading ? (
+        <LoadingCard />
+      ) : error ? (
+        <ErrorCard detail={error} onRetry={reload} />
+      ) : !actions || actions.length === 0 ? (
         <div className="card empty-state">
           <p>{lang === 'pcm' ? 'Nothing dey worry now — your hustle steady.' : 'Nothing urgent right now — your business looks steady.'}</p>
         </div>

@@ -1,3 +1,34 @@
-node_modules
-dist
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# OS / editor cruft
 .DS_Store
+Thumbs.db
+
+# Python (backend)
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# ---------------------------------------------------------------------------
+# Environment files
+#
+# Ignore every .env* file, at any depth (root, backend/, future packages).
+# Real secrets live in these and must never be committed.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+
+# ...except these, which are deliberately committed. Negations must stay
+# below the rules above, since the last matching pattern wins.
+#
+#   .env.example      placeholder templates only - see backend/app/db.py
+#   /.env.production  public VITE_API_URL, read by Vite at build time
+!.env.example
+!.env.*.example
+!/.env.production
