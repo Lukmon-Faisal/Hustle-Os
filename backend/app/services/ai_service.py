@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 
@@ -11,6 +12,8 @@ from app.services.analytics import (
 )
 from app.models.inventory import InventoryItem
 from app.models.supplier import Supplier
+
+log = logging.getLogger(__name__)
 
 def money(n): return f"₦{n:,.0f}"
 def clamp(n): return max(5,min(98,round(n)))
@@ -49,6 +52,55 @@ ASK_SCHEMA = {
         "recommendation": {"type": "string", "description": "What to do next."},
     },
     "required": ["fact", "inference", "recommendation"],
+    "additionalProperties": False,
+}
+
+# --- /insights narration configuration -------------------------------------
+NARRATE_MODEL = ASK_MODEL          # same fast tier; both paths are latency-sensitive
+NARRATE_MAX_TOKENS = 4096
+
+# Only the prose is the model's job. `id`, `kind` and `severity` stay
+# deterministic: InsightCard.tsx does KIND_LABEL[insight.kind][lang], so a kind
+# outside the frontend's union is `undefined[lang]` — a TypeError that takes the
+# whole Dashboard render down. Severity drives a CSS class and id is a React
+# key, so those are not the model's to guess either.
+NARRATION_KEYS = ("title", "titlePidgin", "detail", "detailPidgin")
+
+NARRATE_SYSTEM = (
+    "You are Hustle OS, an AI business analyst for Nigerian informal vendors. Your job is "
+    "to narrate financial data into warm, natural Nigerian Pidgin. Do not hallucinate "
+    "numbers. You must return ONLY a raw JSON array of objects, with no markdown "
+    "formatting, no backticks, and no preamble. The JSON keys MUST exactly match this "
+    'structure for each item: {"id": string, "title": string, "titlePidgin": string, '
+    '"detail": string, "detailPidgin": string}. '
+    "Return the array under the key \"insights\". Echo each trigger's id back exactly as "
+    "given so each narration can be matched to its trigger. `title` and `detail` are "
+    "English; `titlePidgin` and `detailPidgin` are Nigerian Pidgin — not translations of "
+    "each other word for word, but the same point said naturally in each. Keep titles "
+    "under 12 words and details to one or two sentences. Use only figures that appear in "
+    "that trigger's `facts`, and let its `tone` set how urgent you sound."
+)
+
+NARRATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "insights": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "titlePidgin": {"type": "string"},
+                    "detail": {"type": "string"},
+                    "detailPidgin": {"type": "string"},
+                },
+                "required": ["id", "title", "titlePidgin", "detail", "detailPidgin"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["insights"],
     "additionalProperties": False,
 }
 
@@ -102,26 +154,158 @@ def health(db,bid):
     else: s="Your business needs attention in more than one area right now."; sp="Your business need attention for more than one area now."
     return {"overall":overall,"components":comps,"summary":s,"summaryPidgin":sp}
 
-def insights(db,bid):
+def _insight_triggers(db,bid):
+    """The deterministic half of insights(): every trigger the math fires, with
+    the raw figures behind it and ready-made prose.
+
+    `kind`/`severity` are decided here, never by the model. `facts` is the only
+    thing the narrator may quote numbers from. `fallback` is the Phase-1 wording,
+    used verbatim whenever narration is unavailable — so the Dashboard degrades
+    to plainer English rather than to nothing."""
     out=[]; p=period_over_period(db,bid,30)
     tops=sorted(sales_by_product(db,bid,30),key=lambda x:x["revenue"],reverse=True)
 
     if tops:
         t=tops[0]
-        out.append({"id":"top-product","kind":"fact","title":f"{t['product']} is your top earner this month","titlePidgin":f"{t['product']} na your number one product this month","detail":f"It brought in {money(t['revenue'])} across {t['qty']} units sold.","detailPidgin":f"E bring {money(t['revenue'])} from {t['qty']} units wey sell.","severity":"neutral"})
+        out.append({
+          "id":"top-product","kind":"fact","severity":"neutral","topic":"top_selling_product",
+          "facts":{"product":t["product"],"revenue_ngn":round(t["revenue"],2),"units_sold":t["qty"],"period_days":30},
+          "fallback":{
+            "title":f"{t['product']} is your top earner this month",
+            "titlePidgin":f"{t['product']} na your number one product this month",
+            "detail":f"It brought in {money(t['revenue'])} across {t['qty']} units sold.",
+            "detailPidgin":f"E bring {money(t['revenue'])} from {t['qty']} units wey sell.",
+          },
+        })
 
     for i,(name,g) in enumerate(_growing_products(db,bid)[:MAX_GROWTH_INSIGHTS]):
-        out.append({"id":f"growth-{i}-{_slug(name)}","kind":"fact","title":f"{name} sales are up {round(g['changePct'])}% this month","titlePidgin":f"{name} sales don increase {round(g['changePct'])}%","detail":f"{name} brought in {money(g['now'])} in the last 30 days, up from {money(g['prev'])}.","detailPidgin":f"{name} bring {money(g['now'])} for the last 30 days, e pass the {money(g['prev'])} of before.","severity":"positive"})
+        out.append({
+          "id":f"growth-{i}-{_slug(name)}","kind":"fact","severity":"positive","topic":"product_growing",
+          "facts":{"product":name,"revenue_now_ngn":round(g["now"],2),"revenue_previous_ngn":round(g["prev"],2),"change_pct":round(g["changePct"],1),"period_days":30},
+          "fallback":{
+            "title":f"{name} sales are up {round(g['changePct'])}% this month",
+            "titlePidgin":f"{name} sales don increase {round(g['changePct'])}%",
+            "detail":f"{name} brought in {money(g['now'])} in the last 30 days, up from {money(g['prev'])}.",
+            "detailPidgin":f"{name} bring {money(g['now'])} for the last 30 days, e pass the {money(g['prev'])} of before.",
+          },
+        })
 
     rr=repeat_customer_rate(db,bid)
-    if rr>0: out.append({"id":"repeat-customers","kind":"fact","title":f"{rr}% of your customers came back this period","titlePidgin":f"{rr}% of your customers come back","detail":"Repeat customers are a strong share of your order volume.","detailPidgin":"Repeat customers dey drive plenty of your orders.","severity":"positive"})
+    if rr>0:
+        out.append({
+          "id":"repeat-customers","kind":"fact","severity":"positive","topic":"repeat_customers",
+          "facts":{"repeat_customer_rate_pct":rr,"period_days":30},
+          "fallback":{
+            "title":f"{rr}% of your customers came back this period",
+            "titlePidgin":f"{rr}% of your customers come back",
+            "detail":"Repeat customers are a strong share of your order volume.",
+            "detailPidgin":"Repeat customers dey drive plenty of your orders.",
+          },
+        })
 
     for i,(s,ch) in enumerate([x for x in _price_rises(db,bid) if x[1]["changePct"]>=SUPPLIER_INSIGHT_PCT][:MAX_SUPPLIER_INSIGHTS]):
-        out.append({"id":f"supplier-{i}-{_slug(s.name)}","kind":"fact","title":f"Your {s.category} cost from {s.name} rose {round(ch['changePct'])}%","titlePidgin":f"{s.name} price for {s.category} don increase {round(ch['changePct'])}%","detail":f"{s.name}'s unit price moved from {money(ch['first'])} to {money(ch['last'])}.","detailPidgin":f"{s.name} price change from {money(ch['first'])} to {money(ch['last'])}.","severity":"warning"})
+        out.append({
+          "id":f"supplier-{i}-{_slug(s.name)}","kind":"fact","severity":"warning","topic":"supplier_price_rise",
+          "facts":{"supplier":s.name,"category":s.category,"first_price_ngn":ch["first"],"last_price_ngn":ch["last"],"change_pct":round(ch["changePct"],1)},
+          "fallback":{
+            "title":f"Your {s.category} cost from {s.name} rose {round(ch['changePct'])}%",
+            "titlePidgin":f"{s.name} price for {s.category} don increase {round(ch['changePct'])}%",
+            "detail":f"{s.name}'s unit price moved from {money(ch['first'])} to {money(ch['last'])}.",
+            "detailPidgin":f"{s.name} price change from {money(ch['first'])} to {money(ch['last'])}.",
+          },
+        })
+
+    if p["revenueChangePct"]<0:
+        drop=abs(round(p["revenueChangePct"]))
+        out.append({
+          "id":"revenue-drop","kind":"inference","severity":"warning","topic":"revenue_declined",
+          "facts":{"revenue_now_ngn":round(p["revenueNow"],2),"revenue_previous_ngn":round(p["revenuePrev"],2),"change_pct":round(p["revenueChangePct"],1),"period_days":30},
+          "fallback":{
+            "title":f"Revenue fell {drop}% compared with the previous 30 days",
+            "titlePidgin":f"Money wey enter reduce {drop}% pass the last 30 days",
+            "detail":f"Sales brought in {money(p['revenueNow'])}, down from {money(p['revenuePrev'])}.",
+            "detailPidgin":f"Sales bring {money(p['revenueNow'])}, e reduce from {money(p['revenuePrev'])}.",
+          },
+        })
 
     if p["expenseChangePct"]>p["revenueChangePct"]:
-        out.append({"id":"expenses-outpacing","kind":"inference","title":"Expenses are growing faster than revenue","titlePidgin":"Expenses dey rise pass the money wey dey enter","detail":f"Revenue moved {round(p['revenueChangePct'])}% while expenses moved {round(p['expenseChangePct'])}%.","detailPidgin":"Money wey enter change, but expenses dey rise faster.","severity":"warning"})
+        out.append({
+          "id":"expenses-outpacing","kind":"inference","severity":"warning","topic":"expenses_outpacing_revenue",
+          "facts":{"revenue_change_pct":round(p["revenueChangePct"],1),"expense_change_pct":round(p["expenseChangePct"],1),"period_days":30},
+          "fallback":{
+            "title":"Expenses are growing faster than revenue",
+            "titlePidgin":"Expenses dey rise pass the money wey dey enter",
+            "detail":f"Revenue moved {round(p['revenueChangePct'])}% while expenses moved {round(p['expenseChangePct'])}%.",
+            "detailPidgin":"Money wey enter change, but expenses dey rise faster.",
+          },
+        })
 
+    return out
+
+def _narrate(triggers):
+    """Narrate every trigger in ONE batch call.
+
+    Returns {trigger_id: {narration keys}}. Any failure — missing key, network,
+    rate limit, malformed JSON — returns {} so insights() falls back to the
+    deterministic prose. The except is deliberately broad: unlike /ask, which is
+    user-initiated and should surface its error, this runs on every Dashboard
+    load and must never be the reason the page fails to render."""
+    api_key=os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        log.warning("ANTHROPIC_API_KEY is not set — serving deterministic insight text.")
+        return {}
+
+    payload=[{"id":t["id"],"topic":t["topic"],"tone":t["severity"],"facts":t["facts"]} for t in triggers]
+    try:
+        client=anthropic.Anthropic(api_key=api_key)
+        resp=client.messages.create(
+            model=NARRATE_MODEL,
+            max_tokens=NARRATE_MAX_TOKENS,
+            system=NARRATE_SYSTEM,
+            messages=[{"role":"user","content":(
+                f"Narrate these {len(payload)} triggers — exactly one object per trigger, "
+                "keeping each trigger's id:\n\n"
+                f"{json.dumps(payload,ensure_ascii=False,indent=2)}"
+            )}],
+            output_config={"format":{"type":"json_schema","schema":NARRATE_SCHEMA}},
+        )
+        data=json.loads(_strip_fence(next((b.text for b in resp.content if b.type=="text"),"")))
+        rows=data.get("insights") if isinstance(data,dict) else data
+        narrated={}
+        for r in rows or []:
+            rid=str(r.get("id") or "")
+            if rid:
+                narrated[rid]={k:str(r.get(k) or "").strip() for k in NARRATION_KEYS}
+        missing=[t["id"] for t in triggers if t["id"] not in narrated]
+        if missing:
+            log.warning("Narration missing for %s — using deterministic text for those.", missing)
+        return narrated
+    except Exception:
+        log.exception("Insight narration failed — falling back to deterministic text.")
+        return {}
+
+def insights(db,bid):
+    triggers=_insight_triggers(db,bid)
+    if not triggers:
+        return []
+
+    narrated=_narrate(triggers)
+    out=[]
+    for t in triggers:
+        n=narrated.get(t["id"]) or {}
+        fb=t["fallback"]
+        # Key order mirrors the Insight interface in src/types/index.ts. Prose
+        # comes from the model when present, deterministic text otherwise; the
+        # enums and the id always come from the trigger.
+        out.append({
+          "id":t["id"],
+          "kind":t["kind"],
+          "title":n.get("title") or fb["title"],
+          "titlePidgin":n.get("titlePidgin") or fb["titlePidgin"],
+          "detail":n.get("detail") or fb["detail"],
+          "detailPidgin":n.get("detailPidgin") or fb["detailPidgin"],
+          "severity":t["severity"],
+        })
     return out
 
 def anomalies(db,bid):
