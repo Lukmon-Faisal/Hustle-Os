@@ -1,5 +1,7 @@
+import re
+
 from app.services.analytics import (
-    period_over_period, sales_by_product, product_growth, expenses_by_category,
+    period_over_period, sales_by_product, product_growth,
     repeat_customer_rate, inventory_days_remaining, supplier_price_change
 )
 from app.models.inventory import InventoryItem
@@ -7,13 +9,55 @@ from app.models.supplier import Supplier
 
 def money(n): return f"₦{n:,.0f}"
 def clamp(n): return max(5,min(98,round(n)))
+def _slug(s): return re.sub(r"[^a-z0-9]+","-",str(s).lower()).strip("-") or "item"
+
+# Thresholds live here rather than inline so the rules stay readable and the
+# LLM narration layer (phase 3) can quote the same numbers it triggered on.
+LOW_STOCK_ANOMALY_DAYS = 3
+LOW_STOCK_ACTION_DAYS = 5
+SUPPLIER_JUMP_PCT = 10
+SUPPLIER_INSIGHT_PCT = 5
+PRODUCT_GROWTH_PCT = 5
+MAX_GROWTH_INSIGHTS = 2
+MAX_SUPPLIER_INSIGHTS = 2
 
 def _items(db,bid): return db.query(InventoryItem).filter(InventoryItem.business_id==bid).all()
+def _suppliers(db,bid): return db.query(Supplier).filter(Supplier.business_id==bid).all()
+
+def _stock_cover(db,bid):
+    """(item, days_of_cover) for every inventory item we can measure, scarcest
+    first. Items with no recorded velocity are skipped — zero velocity carries
+    no signal about whether the item is running out."""
+    out=[]
+    for it in _items(db,bid):
+        d=inventory_days_remaining(it)
+        if d is not None: out.append((it,d))
+    return sorted(out,key=lambda x:x[1])
+
+def _price_rises(db,bid):
+    """(supplier, change) for suppliers whose unit price went up, steepest
+    first. Derived from whichever suppliers the business actually has."""
+    out=[]
+    for s in _suppliers(db,bid):
+        ch=supplier_price_change(db,bid,s.id)
+        if ch and ch["changePct"]>0: out.append((s,ch))
+    return sorted(out,key=lambda x:x[1]["changePct"],reverse=True)
+
+def _growing_products(db,bid,days=30):
+    """(product, growth) for products growing faster than PRODUCT_GROWTH_PCT,
+    fastest first. Products come from real sales, not a fixed list."""
+    out=[]
+    for row in sales_by_product(db,bid,days):
+        g=product_growth(db,bid,row["product"],days)
+        if g["now"]>0 and g["changePct"]>PRODUCT_GROWTH_PCT: out.append((row["product"],g))
+    return sorted(out,key=lambda x:x[1]["changePct"],reverse=True)
 
 def health(db,bid):
     p=period_over_period(db,bid,30); rr=repeat_customer_rate(db,bid)
-    inv=next((x for x in _items(db,bid) if x.name.lower()=="chicken"),None)
-    inv_score=70 if not inv else clamp(60+(inventory_days_remaining(inv) or 0-2)*8)
+    cover=_stock_cover(db,bid)
+    # Averaged across every measurable item. Individual at-risk items are not
+    # lost to the average — anomalies() and actions() surface them by name.
+    inv_score=70 if not cover else round(sum(clamp(60+(d-2)*8) for _,d in cover)/len(cover))
     comps=[
       {"key":"revenue","label":"Revenue consistency","labelPidgin":"Money wey enter, e steady?","score":clamp(60+p["revenueChangePct"])},
       {"key":"expense","label":"Expense control","labelPidgin":"Expense control","score":clamp(75-max(0,p["expenseChangePct"]-p["revenueChangePct"])*1.4)},
@@ -29,35 +73,51 @@ def health(db,bid):
 
 def insights(db,bid):
     out=[]; p=period_over_period(db,bid,30)
-    for product in ["Chicken","Drinks"]:
-        g=product_growth(db,bid,product,30)
-        if g["now"]>0 and (product=="Chicken" or g["changePct"]>5):
-            out.append({"id":f"{product.lower()}-growth","kind":"fact","title":f"{product} sales are up {round(g['changePct'])}% this month","titlePidgin":f"{product} sales don increase {round(g['changePct'])}%","detail":f"{product} brought in {money(g['now'])} in the last 30 days.","detailPidgin":f"{product} bring {money(g['now'])} for the last 30 days.","severity":"positive"})
+    tops=sorted(sales_by_product(db,bid,30),key=lambda x:x["revenue"],reverse=True)
+
+    if tops:
+        t=tops[0]
+        out.append({"id":"top-product","kind":"fact","title":f"{t['product']} is your top earner this month","titlePidgin":f"{t['product']} na your number one product this month","detail":f"It brought in {money(t['revenue'])} across {t['qty']} units sold.","detailPidgin":f"E bring {money(t['revenue'])} from {t['qty']} units wey sell.","severity":"neutral"})
+
+    for i,(name,g) in enumerate(_growing_products(db,bid)[:MAX_GROWTH_INSIGHTS]):
+        out.append({"id":f"growth-{i}-{_slug(name)}","kind":"fact","title":f"{name} sales are up {round(g['changePct'])}% this month","titlePidgin":f"{name} sales don increase {round(g['changePct'])}%","detail":f"{name} brought in {money(g['now'])} in the last 30 days, up from {money(g['prev'])}.","detailPidgin":f"{name} bring {money(g['now'])} for the last 30 days, e pass the {money(g['prev'])} of before.","severity":"positive"})
+
     rr=repeat_customer_rate(db,bid)
     if rr>0: out.append({"id":"repeat-customers","kind":"fact","title":f"{rr}% of your customers came back this period","titlePidgin":f"{rr}% of your customers come back","detail":"Repeat customers are a strong share of your order volume.","detailPidgin":"Repeat customers dey drive plenty of your orders.","severity":"positive"})
+
+    for i,(s,ch) in enumerate([x for x in _price_rises(db,bid) if x[1]["changePct"]>=SUPPLIER_INSIGHT_PCT][:MAX_SUPPLIER_INSIGHTS]):
+        out.append({"id":f"supplier-{i}-{_slug(s.name)}","kind":"fact","title":f"Your {s.category} cost from {s.name} rose {round(ch['changePct'])}%","titlePidgin":f"{s.name} price for {s.category} don increase {round(ch['changePct'])}%","detail":f"{s.name}'s unit price moved from {money(ch['first'])} to {money(ch['last'])}.","detailPidgin":f"{s.name} price change from {money(ch['first'])} to {money(ch['last'])}.","severity":"warning"})
+
     if p["expenseChangePct"]>p["revenueChangePct"]:
         out.append({"id":"expenses-outpacing","kind":"inference","title":"Expenses are growing faster than revenue","titlePidgin":"Expenses dey rise pass the money wey dey enter","detail":f"Revenue moved {round(p['revenueChangePct'])}% while expenses moved {round(p['expenseChangePct'])}%.","detailPidgin":"Money wey enter change, but expenses dey rise faster.","severity":"warning"})
-    tops=sorted(sales_by_product(db,bid,30),key=lambda x:x["revenue"],reverse=True)
-    if tops:
-        t=tops[0]; out.append({"id":"top-product","kind":"fact","title":f"{t['product']} is your top earner this month","titlePidgin":f"{t['product']} na your number one product this month","detail":f"It brought in {money(t['revenue'])} across {t['qty']} units sold.","detailPidgin":f"E bring {money(t['revenue'])} from {t['qty']} units wey sell.","severity":"neutral"})
+
     return out
 
 def anomalies(db,bid):
     out=[]
-    inv=next((x for x in _items(db,bid) if x.name.lower()=="chicken"),None)
-    if inv:
-        d=inventory_days_remaining(inv)
-        if d is not None and d<=3: out.append({"id":"anomaly-chicken-stock","kind":"inference","title":"Chicken stock is running low","titlePidgin":"Chicken stock dey finish","detail":f"At the current selling pace, chicken may run out in about {d} day(s).","detailPidgin":f"If the pace continue, chicken fit finish for about {d} day(s).","severity":"critical"})
+    for i,(it,d) in enumerate(_stock_cover(db,bid)):
+        if d<=LOW_STOCK_ANOMALY_DAYS:
+            out.append({"id":f"anomaly-stock-{i}-{_slug(it.name)}","kind":"inference","title":f"{it.name} stock is running low","titlePidgin":f"{it.name} stock dey finish","detail":f"At the current selling pace, {it.name.lower()} may run out in about {d} day(s).","detailPidgin":f"If the pace continue, {it.name.lower()} fit finish for about {d} day(s).","severity":"critical"})
+
+    for i,(s,ch) in enumerate(_price_rises(db,bid)):
+        if ch["changePct"]>=SUPPLIER_JUMP_PCT:
+            out.append({"id":f"anomaly-price-{i}-{_slug(s.name)}","kind":"inference","title":f"Unusual price jump from {s.name}","titlePidgin":f"Something dey wrong with {s.name} price","detail":f"{s.name}'s price rose {round(ch['changePct'])}% — sharper than a typical monthly change.","detailPidgin":f"{s.name} price rise {round(ch['changePct'])}% — e pass normal monthly change.","severity":"critical"})
+
     return out
 
 def actions(db,bid):
     out=[]
-    inv=next((x for x in _items(db,bid) if x.name.lower()=="chicken"),None)
-    if inv:
-        d=inventory_days_remaining(inv)
-        if d is not None and d<=5: out.append({"id":"action-restock","priority":"medium","title":"Chicken stock is low","titlePidgin":"Chicken stock low","why":f"Only about {d} day(s) of chicken stock remain at the current sales pace.","whyPidgin":f"Na about {d} day(s) of chicken stock remain.","impact":"Avoids turning away chicken orders during a busy week.","impactPidgin":"E go stop you from turn away chicken customers.","nextStep":"Plan a restock before the weekend rush.","nextStepPidgin":"Plan restock before weekend rush reach."})
-    g=product_growth(db,bid,"Drinks",30)
-    if g["changePct"]>8: out.append({"id":"action-drinks-opportunity","priority":"opportunity","title":"Drinks sales are increasing","titlePidgin":"Drinks sales dey increase","why":f"Drinks revenue is up {round(g['changePct'])}%.","whyPidgin":f"Drinks money increase {round(g['changePct'])}%.","impact":"A small stock increase could capture more of this demand.","impactPidgin":"If you increase stock small, you fit sell more.","nextStep":"Consider increasing drinks stock by 15-20% next order.","nextStepPidgin":"Try increase drinks stock small for next order."})
+    for i,(s,ch) in enumerate(_price_rises(db,bid)):
+        if ch["changePct"]>=SUPPLIER_JUMP_PCT:
+            out.append({"id":f"action-supplier-{i}-{_slug(s.name)}","priority":"high","title":f"{s.name}'s price has increased","titlePidgin":f"{s.name} price don increase","why":f"{s.category} cost rose {round(ch['changePct'])}%, squeezing your margin.","whyPidgin":f"{s.category} cost rise {round(ch['changePct'])}%, e dey chop your profit.","impact":f"Protects your margin on anything you sell using {s.category}.","impactPidgin":f"E go protect your profit for anything wey use {s.category}.","nextStep":f"Compare prices with at least one alternative {s.category} supplier this week.","nextStepPidgin":f"Compare price with one next {s.category} supplier this week."})
+
+    for i,(it,d) in enumerate(_stock_cover(db,bid)):
+        if d<=LOW_STOCK_ACTION_DAYS:
+            out.append({"id":f"action-restock-{i}-{_slug(it.name)}","priority":"medium","title":f"{it.name} stock is low","titlePidgin":f"{it.name} stock low","why":f"Only about {d} day(s) of {it.name.lower()} remain at the current sales pace.","whyPidgin":f"Na about {d} day(s) of {it.name.lower()} remain.","impact":f"Avoids turning away {it.name.lower()} orders during a busy week.","impactPidgin":f"E go stop you from turn away {it.name.lower()} customers.","nextStep":f"Plan a {it.name.lower()} restock before the weekend rush.","nextStepPidgin":f"Plan {it.name.lower()} restock before weekend rush reach."})
+
+    for i,(name,g) in enumerate(_growing_products(db,bid)[:MAX_GROWTH_INSIGHTS]):
+        out.append({"id":f"action-grow-{i}-{_slug(name)}","priority":"opportunity","title":f"{name} sales are increasing","titlePidgin":f"{name} sales dey increase","why":f"{name} revenue is up {round(g['changePct'])}% — customers are buying more.","whyPidgin":f"{name} money increase {round(g['changePct'])}% — customers dey buy more.","impact":"A small stock increase could capture more of this demand.","impactPidgin":"If you increase stock small, you fit sell more.","nextStep":f"Consider increasing {name.lower()} stock by 15-20% next order.","nextStepPidgin":f"Try increase {name.lower()} stock small, like 15-20% for next order."})
+
     return out
 
 def passport(db,bid):
@@ -65,8 +125,15 @@ def passport(db,bid):
     b=db.get(Business,bid); p30=period_over_period(db,bid,30); p90=period_over_period(db,bid,90)
     rr=repeat_customer_rate(db,bid)
     sales_count=len(b.sales)
-    inv=next((x for x in _items(db,bid) if x.name.lower()=="chicken"),None)
-    days=inventory_days_remaining(inv) if inv else None
+    cover=_stock_cover(db,bid)
+    # Share of stock lines about to run out, rather than average cover:
+    # averaging lets one well-stocked item hide an item that runs out tomorrow,
+    # and this rating is meant as evidence about how the business is really run.
+    at_risk=sum(1 for _,d in cover if d<=LOW_STOCK_ACTION_DAYS)
+    if not cover: inv_eff="Good"
+    elif at_risk==0: inv_eff="Excellent"
+    elif at_risk/len(cover)<=0.5: inv_eff="Good"
+    else: inv_eff="Needs work"
     return {
       "businessName":b.name,"operatingHistoryMonths":b.years_operating*12,
       "verifiedActivityMonths":min(b.years_operating*12,14),
@@ -74,7 +141,7 @@ def passport(db,bid):
       "transactionConsistency":"Strong" if sales_count>800 else ("Moderate" if sales_count>300 else "Weak"),
       "customerRetentionPct":rr,
       "expenseStability":"Strong" if abs(p30["expenseChangePct"]-p30["revenueChangePct"])<5 else ("Moderate" if abs(p30["expenseChangePct"]-p30["revenueChangePct"])<20 else "Weak"),
-      "inventoryEfficiency":"Excellent" if days is not None and days>5 else "Good",
+      "inventoryEfficiency":inv_eff,
       "cashFlowHealth":"Strong" if p30["profitNow"]>p30["profitPrev"] else ("Moderate" if p30["profitNow"]>0 else "Weak"),
       "signals":[
         {"label":"Business activity verified","verified":sales_count>0},

@@ -5,10 +5,14 @@
 // numbers. Every conversion happens here so pages/services stay unchanged.
 // ---------------------------------------------------------------------------
 import type {
+  ActionItem,
   Business,
   BusinessData,
+  BusinessHealth,
+  BusinessPassport,
   Customer,
   ExpenseTransaction,
+  Insight,
   InventoryItem,
   InvoiceRecord,
   PaymentMethod,
@@ -289,4 +293,76 @@ export async function createExpense(
     }),
   })
   return toExpense(created)
+}
+
+// --- AI endpoints ---------------------------------------------------------
+// The AI routers already emit camelCase keys that line up 1:1 with the types
+// in src/types, so unlike the data endpoints above these need no field
+// renaming — only numeric coercion, because anything derived from a Numeric
+// column can arrive as a string.
+
+export interface AiAnswer {
+  en: string
+  pcm: string
+}
+
+interface WireHealth {
+  overall: string | number
+  components: { key: string; label: string; labelPidgin: string; score: string | number }[]
+  summary: string
+  summaryPidgin: string
+}
+
+interface WirePassport extends Omit<
+  BusinessPassport,
+  'operatingHistoryMonths' | 'verifiedActivityMonths' | 'customerRetentionPct'
+> {
+  operatingHistoryMonths: string | number
+  verifiedActivityMonths: string | number
+  customerRetentionPct: string | number
+}
+
+export async function fetchBusinessHealth(businessId: string): Promise<BusinessHealth> {
+  const h = await request<WireHealth>(`/businesses/${businessId}/health`)
+  return {
+    overall: num(h.overall),
+    components: (h.components ?? []).map((c) => ({
+      key: c.key,
+      label: c.label,
+      labelPidgin: c.labelPidgin,
+      score: num(c.score),
+    })),
+    summary: h.summary,
+    summaryPidgin: h.summaryPidgin,
+  }
+}
+
+export async function fetchInsights(businessId: string): Promise<Insight[]> {
+  return (await request<Insight[]>(`/businesses/${businessId}/insights`)) ?? []
+}
+
+export async function fetchAnomalies(businessId: string): Promise<Insight[]> {
+  return (await request<Insight[]>(`/businesses/${businessId}/anomalies`)) ?? []
+}
+
+export async function fetchActions(businessId: string): Promise<ActionItem[]> {
+  return (await request<ActionItem[]>(`/businesses/${businessId}/actions`)) ?? []
+}
+
+export async function fetchPassport(businessId: string): Promise<BusinessPassport> {
+  const p = await request<WirePassport>(`/businesses/${businessId}/passport`)
+  return {
+    ...p,
+    operatingHistoryMonths: num(p.operatingHistoryMonths),
+    verifiedActivityMonths: num(p.verifiedActivityMonths),
+    customerRetentionPct: num(p.customerRetentionPct),
+    signals: p.signals ?? [],
+  }
+}
+
+export async function askQuestion(businessId: string, question: string): Promise<AiAnswer> {
+  return await request<AiAnswer>(`/businesses/${businessId}/ask`, {
+    method: 'POST',
+    body: JSON.stringify({ question }),
+  })
 }

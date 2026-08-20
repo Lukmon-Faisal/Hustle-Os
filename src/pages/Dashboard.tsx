@@ -2,16 +2,40 @@ import { useMemo } from 'react'
 import { useApp } from '../context/AppContext'
 import { HealthGauge } from '../components/HealthGauge'
 import { InsightCard } from '../components/InsightCard'
-import { analyzeBusinessHealth, generateBusinessInsights, generateActionPlan } from '../services/aiService'
+import { DemoAiNotice, ErrorCard, LoadingCard } from '../components/AsyncStates'
+import { useApiResource } from '../hooks/useApiResource'
+import { fetchActions, fetchBusinessHealth, fetchInsights } from '../services/api'
 import { sumSales, sumExpenses, countSales, formatNaira } from '../services/analytics'
 import { EmptyState } from '../components/EmptyState'
+import type { ActionItem, BusinessHealth, Insight } from '../types'
+
+interface DashboardAi {
+  health: BusinessHealth
+  insights: Insight[]
+  actions: ActionItem[]
+}
 
 export function Dashboard() {
-  const { t, lang, data, goTo } = useApp()
+  const { t, lang, data, businessId, goTo } = useApp()
 
-  const health = useMemo(() => (data ? analyzeBusinessHealth(data) : null), [data])
-  const insights = useMemo(() => (data ? generateBusinessInsights(data).slice(0, 4) : []), [data])
-  const actions = useMemo(() => (data ? generateActionPlan(data) : []), [data])
+  // One loader for all three AI panels: they render together, so fetching them
+  // in parallel behind a single loading state avoids three staggered spinners.
+  const loader = useMemo(
+    () =>
+      businessId
+        ? async (): Promise<DashboardAi> => {
+            const [health, insights, actions] = await Promise.all([
+              fetchBusinessHealth(businessId),
+              fetchInsights(businessId),
+              fetchActions(businessId),
+            ])
+            return { health, insights, actions }
+          }
+        : null,
+    [businessId],
+  )
+
+  const ai = useApiResource(loader)
 
   if (!data) return null
 
@@ -20,7 +44,8 @@ export function Dashboard() {
   const expenses30 = sumExpenses(data, 30)
   const profit30 = revenue30 - expenses30
   const salesCount30 = countSales(data, 30)
-  const topAction = actions[0]
+  const insights = ai.data?.insights.slice(0, 4) ?? []
+  const topAction = ai.data?.actions[0]
 
   return (
     <div className="screen stack">
@@ -33,13 +58,23 @@ export function Dashboard() {
         <EmptyState titleKey="noSalesYet" subKey="addFirstSale" onAction={() => goTo('activity')} actionLabel={t('addSale')} />
       ) : (
         <>
-          <div className="card health-card row" style={{ gap: 20, alignItems: 'center' }}>
-            <HealthGauge score={health!.overall} dark />
-            <div className="stack" style={{ gap: 6 }}>
-              <span className="eyebrow">{t('hustleHealth')}</span>
-              <p style={{ fontSize: 14 }}>{lang === 'pcm' ? health!.summaryPidgin : health!.summary}</p>
+          {!businessId ? (
+            <DemoAiNotice />
+          ) : ai.loading ? (
+            <LoadingCard />
+          ) : ai.error ? (
+            <ErrorCard detail={ai.error} onRetry={ai.reload} />
+          ) : ai.data ? (
+            <div className="card health-card row" style={{ gap: 20, alignItems: 'center' }}>
+              <HealthGauge score={ai.data.health.overall} dark />
+              <div className="stack" style={{ gap: 6 }}>
+                <span className="eyebrow">{t('hustleHealth')}</span>
+                <p style={{ fontSize: 14 }}>
+                  {lang === 'pcm' ? ai.data.health.summaryPidgin : ai.data.health.summary}
+                </p>
+              </div>
             </div>
-          </div>
+          ) : null}
 
           <div className="stat-grid">
             <div className="card stat-card" style={{ ['--accent' as string]: 'var(--green)' }}>
@@ -60,14 +95,16 @@ export function Dashboard() {
             </div>
           </div>
 
-          <div className="stack">
-            <h2>{t('whatsHappening')}</h2>
-            <div className="stack" style={{ gap: 10 }}>
-              {insights.map((ins) => (
-                <InsightCard key={ins.id} insight={ins} />
-              ))}
+          {insights.length > 0 && (
+            <div className="stack">
+              <h2>{t('whatsHappening')}</h2>
+              <div className="stack" style={{ gap: 10 }}>
+                {insights.map((ins) => (
+                  <InsightCard key={ins.id} insight={ins} />
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {topAction && (
             <div className="card" style={{ background: 'var(--purple-deep)', color: 'var(--white)' }}>
