@@ -1,7 +1,12 @@
+import json
+import os
 import re
 
+import anthropic
+from fastapi import HTTPException
+
 from app.services.analytics import (
-    period_over_period, sales_by_product, product_growth,
+    period_over_period, sales_by_product, product_growth, expenses_by_category,
     repeat_customer_rate, inventory_days_remaining, supplier_price_change
 )
 from app.models.inventory import InventoryItem
@@ -20,6 +25,32 @@ SUPPLIER_INSIGHT_PCT = 5
 PRODUCT_GROWTH_PCT = 5
 MAX_GROWTH_INSIGHTS = 2
 MAX_SUPPLIER_INSIGHTS = 2
+
+# --- /ask LLM configuration ------------------------------------------------
+# claude-3-5-haiku-20241022 was retired 2026-02-19; claude-haiku-4-5 is the
+# current fastest/cheapest tier and the direct replacement for that tier.
+ASK_MODEL = "claude-haiku-4-5"
+ASK_MAX_TOKENS = 2048
+
+ASK_SYSTEM = (
+    "You are Hustle OS, a brilliant AI business analyst for Nigerian informal vendors. "
+    "Speak in clear, warm Nigerian Pidgin. Base your answers strictly on the provided "
+    "JSON financial data. Do not invent or hallucinate financial figures. You must "
+    "return ONLY raw JSON, with no markdown formatting, no backticks, and no preamble."
+)
+
+# Passed as output_config.format, which constrains decoding to this schema — the
+# three keys are guaranteed present rather than merely requested in the prompt.
+ASK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "fact": {"type": "string", "description": "What the data says."},
+        "inference": {"type": "string", "description": "What it means."},
+        "recommendation": {"type": "string", "description": "What to do next."},
+    },
+    "required": ["fact", "inference", "recommendation"],
+    "additionalProperties": False,
+}
 
 def _items(db,bid): return db.query(InventoryItem).filter(InventoryItem.business_id==bid).all()
 def _suppliers(db,bid): return db.query(Supplier).filter(Supplier.business_id==bid).all()
@@ -152,17 +183,92 @@ def passport(db,bid):
       ]
     }
 
+def ask_context(db,bid,days=30):
+    """The grounded facts handed to the model, built from existing helpers.
+
+    Every figure here is read out of the database. The system prompt tells the
+    model to reason only over this JSON and invent nothing, so anything not in
+    here is something the model cannot legitimately talk about."""
+    p=period_over_period(db,bid,days)
+    products=sorted(sales_by_product(db,bid,days),key=lambda x:x["revenue"],reverse=True)
+    expenses=sorted(expenses_by_category(db,bid,days),key=lambda x:x["amount"],reverse=True)
+    return {
+      "currency":"NGN",
+      "period_days":days,
+      "revenue":{"now":round(p["revenueNow"],2),"previous":round(p["revenuePrev"],2),"change_pct":round(p["revenueChangePct"],1)},
+      "expenses":{"now":round(p["expenseNow"],2),"previous":round(p["expensePrev"],2),"change_pct":round(p["expenseChangePct"],1)},
+      "profit":{"now":round(p["profitNow"],2),"previous":round(p["profitPrev"],2)},
+      "top_products":[{"product":r["product"],"revenue":round(r["revenue"],2),"units_sold":r["qty"]} for r in products[:5]],
+      "top_expense_categories":[{"category":r["category"],"amount":round(r["amount"],2)} for r in expenses[:5]],
+      "inventory":[{"item":it.name,"stock":float(it.current_stock or 0),"unit":it.unit,"days_of_cover":d} for it,d in _stock_cover(db,bid)[:10]],
+      "repeat_customer_rate_pct":repeat_customer_rate(db,bid),
+      "supplier_price_changes":[{"supplier":s.name,"category":s.category,"first_price":ch["first"],"last_price":ch["last"],"change_pct":round(ch["changePct"],1)} for s,ch in _price_rises(db,bid)[:5]],
+    }
+
+def _strip_fence(t):
+    """output_config.format already guarantees raw JSON, so this is belt-and-braces:
+    if a future model or config change ever wraps the object in a ```json fence,
+    strip it rather than turning a cosmetic slip into a failed request."""
+    t=(t or "").strip()
+    if t.startswith("```"):
+        t=re.sub(r"^```[a-zA-Z]*\s*","",t)
+        t=re.sub(r"\s*```$","",t)
+    return t.strip()
+
 def answer(db,bid,question):
-    q=question.lower(); p=period_over_period(db,bid,30); rr=repeat_customer_rate(db,bid)
-    tops=sorted(sales_by_product(db,bid,30),key=lambda x:x["revenue"],reverse=True)
-    if q.find("profit")>=0 and any(x in q for x in ["reduce","why","drop","fall"]):
-        if p["profitNow"]>=p["profitPrev"]: return {"en":f"Good news — your profit actually grew, from {money(p['profitPrev'])} to {money(p['profitNow'])} over the last 30 days.","pcm":f"Good news — your profit grow, from {money(p['profitPrev'])} to {money(p['profitNow'])} for the last 30 days."}
-        return {"en":f"Your sales moved {round(p['revenueChangePct'])}%, but expenses moved {round(p['expenseChangePct'])}% over the same period. Review supplier costs and pricing.","pcm":f"Your sales change {round(p['revenueChangePct'])}%, but expenses change {round(p['expenseChangePct'])}%. Check supplier cost and pricing."}
-    if any(x in q for x in ["top product","sell the most","best sell","sell pass"]):
-        if not tops: return {"en":"I don't have enough sales data to answer that yet.","pcm":"I no get enough information to answer that yet."}
-        t=tops[0]; return {"en":f"{t['product']} is selling the most, bringing in {money(t['revenue'])} from {t['qty']} units in the last 30 days.","pcm":f"{t['product']} dey sell pass, e bring {money(t['revenue'])} from {t['qty']} units for the last 30 days."}
-    if "customer" in q and any(x in q for x in ["return","repeat","retention"]):
-        return {"en":f"{rr}% of your customers returned within this period.","pcm":f"{rr}% of your customers come back for this period."}
-    if "sales" in q and any(x in q for x in ["drop","fall"]):
-        return {"en":f"Your sales {'increased' if p['revenueChangePct']>=0 else 'fell'} {abs(round(p['revenueChangePct']))}% over the last 30 days.","pcm":f"Your sales {'increase' if p['revenueChangePct']>=0 else 'reduce'} {abs(round(p['revenueChangePct']))}% for the last 30 days."}
-    return {"en":"I don't have enough information to answer that yet. Try asking about profit, top-selling products, expenses, or customer retention.","pcm":"I no get enough information to answer that yet. Try ask about profit, wetin dey sell pass, expenses, or customer retention."}
+    api_key=os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured on the server.")
+
+    context=ask_context(db,bid)
+    prompt=(
+        "Here is this vendor's financial data for the last 30 days as JSON:\n\n"
+        f"{json.dumps(context,ensure_ascii=False,indent=2)}\n\n"
+        f"The vendor asks: {question}\n\n"
+        "Answer using only the figures above. If the data cannot answer the question, "
+        "say so plainly in the 'fact' field instead of guessing."
+    )
+
+    client=anthropic.Anthropic(api_key=api_key)
+    try:
+        resp=client.messages.create(
+            model=ASK_MODEL,
+            max_tokens=ASK_MAX_TOKENS,
+            system=ASK_SYSTEM,
+            messages=[{"role":"user","content":prompt}],
+            output_config={"format":{"type":"json_schema","schema":ASK_SCHEMA}},
+        )
+    except anthropic.AuthenticationError:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY was rejected by the Claude API.")
+    except anthropic.NotFoundError:
+        raise HTTPException(status_code=500, detail=f"Model {ASK_MODEL} is not available to this API key.")
+    except anthropic.RateLimitError:
+        raise HTTPException(status_code=429, detail="The AI analyst is busy right now. Please try again in a moment.")
+    except anthropic.APIStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Claude API returned an error (HTTP {e.status_code}).")
+    except anthropic.APIConnectionError:
+        raise HTTPException(status_code=502, detail="Could not reach the Claude API. Check the server's network access.")
+
+    text=next((b.text for b in resp.content if b.type=="text"),"")
+    try:
+        data=json.loads(_strip_fence(text))
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="The AI analyst returned a response that was not valid JSON.")
+
+    fact=str(data.get("fact") or "").strip()
+    inference=str(data.get("inference") or "").strip()
+    recommendation=str(data.get("recommendation") or "").strip()
+
+    # `en`/`pcm` keep the chat contract the frontend already speaks (AiAnswer in
+    # src/services/api.ts, rendered by AIAnalyst). The three schema keys ride
+    # along so the UI can split fact/inference/recommendation into its own
+    # sections later without another backend change. Both language fields carry
+    # the same Pidgin text — the system prompt asks for Pidgin only.
+    prose=" ".join(x for x in (fact,inference,recommendation) if x)
+    return {
+      "en":prose,
+      "pcm":prose,
+      "fact":fact,
+      "inference":inference,
+      "recommendation":recommendation,
+    }

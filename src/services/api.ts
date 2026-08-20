@@ -304,6 +304,14 @@ export async function createExpense(
 export interface AiAnswer {
   en: string
   pcm: string
+  /**
+   * The /ask endpoint's LLM schema. `en`/`pcm` above are these three joined
+   * into prose for the chat bubble; the parts are sent separately so the UI can
+   * render them as distinct sections. Optional because only /ask returns them.
+   */
+  fact?: string
+  inference?: string
+  recommendation?: string
 }
 
 interface WireHealth {
