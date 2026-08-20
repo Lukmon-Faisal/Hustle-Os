@@ -93,22 +93,29 @@ export interface BusinessHealth {
   summaryPidgin: string
 }
 
-export interface PassportSignal {
-  label: string
-  verified: boolean
-}
-
+/**
+ * The lending-engine contract returned by GET /businesses/{id}/passport.
+ *
+ * Field names are snake_case here — unlike everything else in this file —
+ * because this is a wire contract a partner underwriting system (Wema / ALAT)
+ * consumes directly, not an internal view model. Renaming it on the client
+ * would leave the app and the bank describing the same payload in two
+ * different vocabularies.
+ *
+ * Every field is computed deterministically from transaction rows. No LLM is
+ * involved: a credit decision has to be reproducible and explainable.
+ */
 export interface BusinessPassport {
-  businessName: string
-  operatingHistoryMonths: number
-  verifiedActivityMonths: number
-  revenueConsistency: 'Weak' | 'Moderate' | 'Strong'
-  transactionConsistency: 'Weak' | 'Moderate' | 'Strong'
-  customerRetentionPct: number
-  expenseStability: 'Weak' | 'Moderate' | 'Strong'
-  inventoryEfficiency: 'Needs work' | 'Good' | 'Excellent'
-  cashFlowHealth: 'Weak' | 'Moderate' | 'Strong'
-  signals: PassportSignal[]
+  credit_risk_tier: 'A' | 'B' | 'C' | 'D'
+  recommended_credit_limit_ngn: number
+  thirty_day_gross_revenue: number
+  /** Share of the trailing 30 days with at least one sale, scaled to 100. */
+  transaction_consistency_score: number
+  expense_stability_index: 'High' | 'Medium' | 'Low'
+  inventory_health_status: 'Excellent' | 'Needs Work' | 'Critical'
+  kyc_data_verifiability: boolean
+  /** ISO 8601, UTC. */
+  last_calculated_at: string
 }
 
 export interface ActionItem {

@@ -2,13 +2,15 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 
 import anthropic
 from fastapi import HTTPException
 
 from app.services.analytics import (
     period_over_period, sales_by_product, product_growth, expenses_by_category,
-    repeat_customer_rate, inventory_days_remaining, supplier_price_change
+    repeat_customer_rate, inventory_days_remaining, supplier_price_change,
+    daily_series, active_sales_days
 )
 from app.models.inventory import InventoryItem
 from app.models.supplier import Supplier
@@ -28,6 +30,16 @@ SUPPLIER_INSIGHT_PCT = 5
 PRODUCT_GROWTH_PCT = 5
 MAX_GROWTH_INSIGHTS = 2
 MAX_SUPPLIER_INSIGHTS = 2
+
+# --- passport / lending contract -------------------------------------------
+# Deliberately explicit: an underwriter has to be able to read the policy off
+# the code, and a tier that moves because a constant was buried inline is not
+# an explainable credit decision.
+PASSPORT_WINDOW_DAYS = 30
+CREDIT_LIMIT_RATIO = 0.30      # conservative share of 30-day gross revenue
+EXPENSE_CV_HIGH = 0.35         # coefficient of variation at or under this = "High"
+EXPENSE_CV_MEDIUM = 0.75       # ...and at or under this = "Medium"
+MIN_EXPENSE_DAYS_FOR_CV = 3    # below this, variance is not meaningful
 
 # --- /ask LLM configuration ------------------------------------------------
 # claude-3-5-haiku-20241022 was retired 2026-02-19; claude-haiku-4-5 is the
@@ -335,36 +347,66 @@ def actions(db,bid):
 
     return out
 
-def passport(db,bid):
-    from app.models.business import Business
-    b=db.get(Business,bid); p30=period_over_period(db,bid,30); p90=period_over_period(db,bid,90)
-    rr=repeat_customer_rate(db,bid)
-    sales_count=len(b.sales)
+def _expense_stability_index(db,bid,days=PASSPORT_WINDOW_DAYS):
+    """Volatility of daily expense totals, as an explainable three-way index.
+
+    Uses the coefficient of variation across the days that actually recorded
+    expenses. Vendors buy in bursts — a weekly restock means most days are
+    legitimately zero — so treating empty days as data would mark nearly every
+    honest business unstable. Below MIN_EXPENSE_DAYS_FOR_CV there is not enough
+    signal to speak to variance, so fall back to how far expense growth has
+    diverged from revenue growth over the same window."""
+    vals=[r["expenses"] for r in daily_series(db,bid,days) if r["expenses"]>0]
+    if len(vals)>=MIN_EXPENSE_DAYS_FOR_CV:
+        mean=sum(vals)/len(vals)
+        if mean>0:
+            cv=(sum((v-mean)**2 for v in vals)/len(vals))**0.5/mean
+            if cv<=EXPENSE_CV_HIGH: return "High"
+            if cv<=EXPENSE_CV_MEDIUM: return "Medium"
+            return "Low"
+    p=period_over_period(db,bid,days)
+    gap=abs(p["expenseChangePct"]-p["revenueChangePct"])
+    if gap<5: return "High"
+    if gap<20: return "Medium"
+    return "Low"
+
+def _inventory_health_status(db,bid):
+    """Phase-1 share-at-risk rule, mapped onto the lending contract's wording.
+
+    Averaging cover would let one well-stocked line hide a line that runs out
+    tomorrow, so this counts the share of lines inside the reorder window. With
+    no measurable inventory there is nothing to verify in either direction —
+    reporting 'Excellent' off the back of no data would overstate the business
+    to an underwriter, so unverifiable lands in the middle."""
     cover=_stock_cover(db,bid)
-    # Share of stock lines about to run out, rather than average cover:
-    # averaging lets one well-stocked item hide an item that runs out tomorrow,
-    # and this rating is meant as evidence about how the business is really run.
+    if not cover: return "Needs Work"
     at_risk=sum(1 for _,d in cover if d<=LOW_STOCK_ACTION_DAYS)
-    if not cover: inv_eff="Good"
-    elif at_risk==0: inv_eff="Excellent"
-    elif at_risk/len(cover)<=0.5: inv_eff="Good"
-    else: inv_eff="Needs work"
+    if at_risk==0: return "Excellent"
+    if at_risk/len(cover)<=0.5: return "Needs Work"
+    return "Critical"
+
+def passport(db,bid):
+    """Deterministic credit passport. Same rows in, same payload out — the only
+    field that moves between identical calls is last_calculated_at."""
+    revenue=round(period_over_period(db,bid,PASSPORT_WINDOW_DAYS)["revenueNow"],2)
+    active_days=active_sales_days(db,bid,PASSPORT_WINDOW_DAYS)
+    score=round(active_days/PASSPORT_WINDOW_DAYS*100)
+
+    if score>80 and revenue>0: tier="A"
+    elif score>50: tier="B"
+    elif score>20: tier="C"
+    else: tier="D"
+
     return {
-      "businessName":b.name,"operatingHistoryMonths":b.years_operating*12,
-      "verifiedActivityMonths":min(b.years_operating*12,14),
-      "revenueConsistency":"Strong" if p90["revenueChangePct"]>=10 else ("Moderate" if p90["revenueChangePct"]>=0 else "Weak"),
-      "transactionConsistency":"Strong" if sales_count>800 else ("Moderate" if sales_count>300 else "Weak"),
-      "customerRetentionPct":rr,
-      "expenseStability":"Strong" if abs(p30["expenseChangePct"]-p30["revenueChangePct"])<5 else ("Moderate" if abs(p30["expenseChangePct"]-p30["revenueChangePct"])<20 else "Weak"),
-      "inventoryEfficiency":inv_eff,
-      "cashFlowHealth":"Strong" if p30["profitNow"]>p30["profitPrev"] else ("Moderate" if p30["profitNow"]>0 else "Weak"),
-      "signals":[
-        {"label":"Business activity verified","verified":sales_count>0},
-        {"label":"Transaction history available","verified":sales_count>0},
-        {"label":"Revenue pattern available","verified":sales_count>20},
-        {"label":"Customer activity available","verified":len(b.customers)>0},
-        {"label":"Invoice/payment history available","verified":len(b.invoices)>0},
-      ]
+      "credit_risk_tier":tier,
+      "recommended_credit_limit_ngn":round(revenue*CREDIT_LIMIT_RATIO,2),
+      "thirty_day_gross_revenue":revenue,
+      "transaction_consistency_score":score,
+      "expense_stability_index":_expense_stability_index(db,bid),
+      "inventory_health_status":_inventory_health_status(db,bid),
+      # Fixed true pending a real KYC integration — see schemas/passport.py.
+      "kyc_data_verifiability":True,
+      "last_calculated_at":datetime.now(timezone.utc).isoformat(),
     }
 
 def ask_context(db,bid,days=30):

@@ -13,6 +13,7 @@ def get_business_or_404(business_id: uuid.UUID, db: Session) -> Business:
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from app.db import get_db
+from app.schemas.passport import BusinessPassportRead
 from app.services import ai_service
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["AI"])
@@ -40,7 +41,7 @@ def actions(business_id: uuid.UUID, db: Session = Depends(get_db)):
     get_business_or_404(business_id, db)
     return ai_service.actions(db,business_id)
 
-@router.get("/passport")
+@router.get("/passport", response_model=BusinessPassportRead)
 def passport(business_id: uuid.UUID, db: Session = Depends(get_db)):
     get_business_or_404(business_id, db)
     return ai_service.passport(db,business_id)

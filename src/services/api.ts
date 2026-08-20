@@ -323,11 +323,11 @@ interface WireHealth {
 
 interface WirePassport extends Omit<
   BusinessPassport,
-  'operatingHistoryMonths' | 'verifiedActivityMonths' | 'customerRetentionPct'
+  'recommended_credit_limit_ngn' | 'thirty_day_gross_revenue' | 'transaction_consistency_score'
 > {
-  operatingHistoryMonths: string | number
-  verifiedActivityMonths: string | number
-  customerRetentionPct: string | number
+  recommended_credit_limit_ngn: string | number
+  thirty_day_gross_revenue: string | number
+  transaction_consistency_score: string | number
 }
 
 export async function fetchBusinessHealth(businessId: string): Promise<BusinessHealth> {
@@ -361,10 +361,9 @@ export async function fetchPassport(businessId: string): Promise<BusinessPasspor
   const p = await request<WirePassport>(`/businesses/${businessId}/passport`)
   return {
     ...p,
-    operatingHistoryMonths: num(p.operatingHistoryMonths),
-    verifiedActivityMonths: num(p.verifiedActivityMonths),
-    customerRetentionPct: num(p.customerRetentionPct),
-    signals: p.signals ?? [],
+    recommended_credit_limit_ngn: num(p.recommended_credit_limit_ngn),
+    thirty_day_gross_revenue: num(p.thirty_day_gross_revenue),
+    transaction_consistency_score: num(p.transaction_consistency_score),
   }
 }
 
