@@ -13,6 +13,7 @@ from app.services.analytics import (
     daily_series, active_sales_days
 )
 from app.models.inventory import InventoryItem
+from app.models.product import Product
 from app.models.supplier import Supplier
 
 log = logging.getLogger(__name__)
@@ -118,6 +119,11 @@ NARRATE_SCHEMA = {
 
 # --- /parse-transaction configuration --------------------------------------
 PARSE_MAX_TOKENS = 512
+# How far back to mine sale history for names the vendor already uses, and how
+# many to send. The cap keeps the prompt bounded for a business with a long tail
+# of one-off products.
+PRODUCT_HISTORY_DAYS = 90
+MAX_KNOWN_PRODUCTS = 60
 
 PARSE_SYSTEM = (
     "You are an entity extraction engine for a Nigerian business app. The user will "
@@ -125,6 +131,20 @@ PARSE_SYSTEM = (
     "transaction. Extract the data and return ONLY raw JSON matching this schema exactly: "
     "{ 'type': 'sale' or 'expense', 'item_name': string, 'amount': number, "
     "'quantity': number (default to 1) }. Do not include markdown or backticks."
+    "\n\n"
+    "NAMING THE ITEM. item_name is always a clean standard name: Title Case, singular, "
+    "no quantity, no unit, no verb, no serving word. Containers and servings are never "
+    "part of the name — 'I buy 3 bag of cement' gives 'Cement', 'two plates of moin moin' "
+    "gives 'Moin Moin'. "
+    "This holds whether or not a list of KNOWN ITEMS is supplied, because the first "
+    "transaction a new business records becomes the spelling everything later matches to."
+    "\n\n"
+    "When the message DOES list KNOWN ITEMS and the phrase plainly refers to one of them, "
+    "that overrides the rule above: copy the known item EXACTLY — character for character, "
+    "same spelling and capitalisation. Do not re-spell it, re-case it, pluralise it, or "
+    "bolt units onto it. 'plate of jollof', '3 plates jollof rice' and 'jollof' all refer "
+    "to the known item 'Jollof Rice'; 'two bags of rice' refers to the known item 'Rice'. "
+    "Invent a new name only when the phrase clearly refers to something absent from the list."
 )
 
 PARSE_SCHEMA = {
@@ -530,8 +550,38 @@ def answer(db,bid,question):
       "recommendation":recommendation,
     }
 
-def parse_transaction(text):
+def known_product_names(db,bid,days=PRODUCT_HISTORY_DAYS):
+    """Names this business already uses, for the parser to snap a phrase onto.
+
+    Three sources, because a vendor's vocabulary is spread across all of them:
+    the product catalogue, the inventory lines, and whatever strings past sales
+    were actually recorded under. Sale history matters most — that is where
+    `sales_by_product` groups, so those are the exact spellings a new row has to
+    match to avoid splitting a product in two.
+
+    Deduped case-insensitively, keeping the first spelling seen, so the
+    catalogue's capitalisation wins over a sloppier historical one."""
+    seen={}
+    def add(name):
+        n=(name or "").strip()
+        if n and n.lower() not in seen:
+            seen[n.lower()]=n
+    for p in db.query(Product).filter(Product.business_id==bid).all():
+        add(p.name)
+    for it in _items(db,bid):
+        add(it.name)
+    for row in sales_by_product(db,bid,days):
+        add(row["product"])
+    return list(seen.values())[:MAX_KNOWN_PRODUCTS]
+
+def parse_transaction(text,existing_products=None):
     """Extract a transaction from a spoken or typed phrase.
+
+    `existing_products` is the vendor's current vocabulary (see
+    known_product_names). Passing it is what stops "plate of jollof", "3 plates
+    jollof rice" and "jollof" from becoming three separate products — every one
+    of those splits `sales_by_product`, and with it the Dashboard insights and
+    the top-earner figure.
 
     Writes nothing — the client pre-fills its form with this and the vendor still
     presses Save. Values are coerced and clamped here rather than trusted raw,
@@ -541,7 +591,20 @@ def parse_transaction(text):
     if not phrase:
         raise HTTPException(status_code=422, detail="Nothing to parse — say or type the transaction first.")
 
-    data=_llm_json(PARSE_SYSTEM,phrase,PARSE_SCHEMA,PARSE_MAX_TOKENS,"transaction parse")
+    # The list goes in the user turn, not the system prompt: it changes per
+    # business and per sale, while PARSE_SYSTEM stays byte-stable.
+    known=[str(p).strip() for p in (existing_products or []) if str(p).strip()]
+    if known:
+        content=(
+            "KNOWN ITEMS for this business — if the transaction refers to one of these, "
+            "copy its name exactly:\n"
+            + "\n".join(f"- {n}" for n in known)
+            + f"\n\nTRANSACTION: {phrase}"
+        )
+    else:
+        content=f"TRANSACTION: {phrase}"
+
+    data=_llm_json(PARSE_SYSTEM,content,PARSE_SCHEMA,PARSE_MAX_TOKENS,"transaction parse")
 
     kind=data.get("type")
     if kind not in ("sale","expense"):

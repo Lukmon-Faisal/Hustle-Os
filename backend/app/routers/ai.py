@@ -58,6 +58,10 @@ def ask(business_id: uuid.UUID, payload: AskRequest, db: Session = Depends(get_d
 @router.post("/parse-transaction", response_model=ParsedTransactionRead)
 def parse_transaction(business_id: uuid.UUID, payload: ParseTransactionRequest, db: Session = Depends(get_db)):
     """Extraction only — this writes nothing. The client pre-fills its quick-add
-    form from the result and the vendor confirms with the existing Save button."""
+    form from the result and the vendor confirms with the existing Save button.
+
+    The business's current product vocabulary goes in so the extracted name snaps
+    to a name already in use instead of creating a near-duplicate."""
     get_business_or_404(business_id, db)
-    return ai_service.parse_transaction(payload.text)
+    known = ai_service.known_product_names(db, business_id)
+    return ai_service.parse_transaction(payload.text, known)

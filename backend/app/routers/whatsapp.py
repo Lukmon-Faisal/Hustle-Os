@@ -129,9 +129,14 @@ async def whatsapp_webhook(
             "for the app first, then come back."
         )
 
-    # Step B — same extraction the in-app "Type or Talk" field uses.
+    # Step B — same extraction the in-app "Type or Talk" field uses, with this
+    # business's product vocabulary so a dictated name lands on an existing
+    # product rather than creating a near-duplicate. This path commits straight
+    # to the database with no human confirmation, so the snapping matters more
+    # here than it does in the app.
     try:
-        parsed = ai_service.parse_transaction(Body)
+        known = ai_service.known_product_names(db, business.id)
+        parsed = ai_service.parse_transaction(Body, known)
     except Exception as exc:
         detail = getattr(exc, "detail", None) or "the AI could not read that message"
         log.warning("WhatsApp: parse failed for %r — %s", Body, detail)
