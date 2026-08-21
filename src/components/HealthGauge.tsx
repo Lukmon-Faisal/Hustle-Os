@@ -10,13 +10,15 @@ export function HealthGauge({ score, size = 128, dark = false }: Props) {
   const circumference = 2 * Math.PI * radius
   const pct = Math.max(0, Math.min(100, score))
   const offset = circumference * (1 - pct / 100)
-  const color = pct >= 75 ? '#4ADE80' : pct >= 55 ? 'var(--purple-glow)' : 'var(--amber)'
+  // The gauge sits on a near-black card, so it needs luminous values rather
+  // than the palette's text-on-white greens and ambers, which read as mud here.
+  const color = pct >= 75 ? '#34D399' : pct >= 55 ? 'var(--purple-glow)' : '#FBBF24'
   const trackColor = dark ? 'rgba(255,255,255,0.14)' : 'var(--grey-light)'
   const numberColor = dark ? 'var(--white)' : 'var(--ink)'
   const subColor = dark ? 'rgba(255,255,255,0.55)' : 'var(--grey)'
 
   return (
-    <div className="gauge-wrap" style={{ width: size, height: size }}>
+    <div className="gauge-wrap" style={{ width: size, height: size, flex: '0 0 auto' }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <circle
           cx={size / 2}

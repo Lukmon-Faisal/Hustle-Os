@@ -43,20 +43,20 @@ export function Insights() {
             <AreaChart data={series}>
               <defs>
                 <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#5B2E9C" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#5B2E9C" stopOpacity={0} />
+                  <stop offset="0%" stopColor="#6D28D9" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#6D28D9" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="exp" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#C9822A" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="#C9822A" stopOpacity={0} />
+                  <stop offset="0%" stopColor="#B45309" stopOpacity={0.3} />
+                  <stop offset="100%" stopColor="#B45309" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#E4E0EC" vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
               <XAxis dataKey={xKey} tick={{ fontSize: 10 }} interval="preserveStartEnd" tickFormatter={(v) => (period === 90 ? v : v.slice(5))} />
               <YAxis tick={{ fontSize: 10 }} width={40} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
               <Tooltip formatter={(v: number) => formatNaira(v)} />
-              <Area type="monotone" dataKey="revenue" stroke="#5B2E9C" fill="url(#rev)" strokeWidth={2} />
-              <Area type="monotone" dataKey="expenses" stroke="#C9822A" fill="url(#exp)" strokeWidth={2} />
+              <Area type="monotone" dataKey="revenue" stroke="#6D28D9" fill="url(#rev)" strokeWidth={2} />
+              <Area type="monotone" dataKey="expenses" stroke="#B45309" fill="url(#exp)" strokeWidth={2} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -76,15 +76,15 @@ export function Insights() {
             <AreaChart data={series}>
               <defs>
                 <linearGradient id="profit" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#1C9B6B" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#1C9B6B" stopOpacity={0} />
+                  <stop offset="0%" stopColor="#059669" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#059669" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#E4E0EC" vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
               <XAxis dataKey={xKey} tick={{ fontSize: 10 }} interval="preserveStartEnd" tickFormatter={(v) => (period === 90 ? v : v.slice(5))} />
               <YAxis tick={{ fontSize: 10 }} width={40} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
               <Tooltip formatter={(v: number) => formatNaira(v)} />
-              <Area type="monotone" dataKey="profit" stroke="#1C9B6B" fill="url(#profit)" strokeWidth={2} />
+              <Area type="monotone" dataKey="profit" stroke="#059669" fill="url(#profit)" strokeWidth={2} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -100,11 +100,11 @@ export function Insights() {
         <div style={{ width: '100%', height: 170, marginTop: 8 }}>
           <ResponsiveContainer>
             <BarChart data={productBreakdown}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#E4E0EC" vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
               <XAxis dataKey="product" tick={{ fontSize: 10 }} />
               <YAxis tick={{ fontSize: 10 }} width={40} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
               <Tooltip formatter={(v: number) => formatNaira(v)} />
-              <Bar dataKey="revenue" fill="#3D1E6D" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="revenue" fill="#2E1065" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>

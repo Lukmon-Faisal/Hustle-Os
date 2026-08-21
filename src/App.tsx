@@ -1,5 +1,6 @@
 import { AppProvider, useApp } from './context/AppContext'
 import { BottomNav, TopBar, AskAIFab } from './components/Nav'
+import { PageTransition } from './components/PageTransition'
 import { Onboarding } from './pages/Onboarding'
 import { BusinessSetup } from './pages/BusinessSetup'
 import { Dashboard } from './pages/Dashboard'
@@ -55,7 +56,11 @@ function Shell() {
       {withNav && <BottomNav />}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <TopBar />
-        <Router />
+        {/* Keyed on `screen` so each navigation replays the entrance rather than
+            cross-fading one layout into the next. */}
+        <PageTransition key={screen}>
+          <Router />
+        </PageTransition>
       </div>
       <AskAIFab />
     </div>

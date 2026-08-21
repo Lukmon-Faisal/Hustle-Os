@@ -75,7 +75,7 @@ export function Passport() {
       {!businessId ? (
         <DemoAiNotice />
       ) : loading ? (
-        <LoadingCard />
+        <LoadingCard variant="passport" />
       ) : error ? (
         <ErrorCard detail={error} onRetry={reload} />
       ) : contractMismatch ? (

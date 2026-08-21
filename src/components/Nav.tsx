@@ -1,27 +1,17 @@
+import { Activity, BarChart3, Home, IdCard, MessageSquare, MoreHorizontal } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { useApp, type Screen } from '../context/AppContext'
 
-const ICON_PATHS: Record<string, string> = {
-  home: 'M3 11.5 12 4l9 7.5M5.5 10v9a1 1 0 0 0 1 1H10v-6h4v6h3.5a1 1 0 0 0 1-1v-9',
-  insights: 'M4 19V10M10 19V5M16 19v-7M20 19V9',
-  passport: 'M6 3.5h9a2 2 0 0 1 2 2V19a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 19V6a2.5 2.5 0 0 1 2.5-2.5Zm4.5 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-3.5 8.5c.6-1.8 2-2.5 3.5-2.5s2.9.7 3.5 2.5',
-  activity: 'M3 12h4l2.5-7 4 14 2.5-7H21',
-  more: 'M5 12h.01M12 12h.01M19 12h.01',
-}
-
-function NavIcon({ name }: { name: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d={ICON_PATHS[name]} />
-    </svg>
-  )
-}
-
-const NAV_ITEMS: { screen: Screen; labelKey: 'navHome' | 'navInsights' | 'navPassport' | 'navActivity' | 'navMore'; icon: string; glyph: string }[] = [
-  { screen: 'dashboard', labelKey: 'navHome', icon: 'home', glyph: '⌂' },
-  { screen: 'insights', labelKey: 'navInsights', icon: 'insights', glyph: '◈' },
-  { screen: 'passport', labelKey: 'navPassport', icon: 'passport', glyph: '⧉' },
-  { screen: 'activity', labelKey: 'navActivity', icon: 'activity', glyph: '≡' },
-  { screen: 'settings', labelKey: 'navMore', icon: 'more', glyph: '•••' },
+const NAV_ITEMS: {
+  screen: Screen
+  labelKey: 'navHome' | 'navInsights' | 'navPassport' | 'navActivity' | 'navMore'
+  Icon: LucideIcon
+}[] = [
+  { screen: 'dashboard', labelKey: 'navHome', Icon: Home },
+  { screen: 'insights', labelKey: 'navInsights', Icon: BarChart3 },
+  { screen: 'passport', labelKey: 'navPassport', Icon: IdCard },
+  { screen: 'activity', labelKey: 'navActivity', Icon: Activity },
+  { screen: 'settings', labelKey: 'navMore', Icon: MoreHorizontal },
 ]
 
 export function BottomNav() {
@@ -47,16 +37,15 @@ export function BottomNav() {
       </div>
 
       <div className="sidebar-items">
-        {NAV_ITEMS.map((item) => (
+        {NAV_ITEMS.map(({ screen: target, labelKey, Icon }) => (
           <button
-            key={item.screen}
-            className={`nav-item ${screen === item.screen ? 'active' : ''}`}
-            onClick={() => goTo(item.screen)}
-            aria-current={screen === item.screen ? 'page' : undefined}
+            key={target}
+            className={`nav-item ${screen === target ? 'active' : ''}`}
+            onClick={() => goTo(target)}
+            aria-current={screen === target ? 'page' : undefined}
           >
-            <span className="icon-glyph" aria-hidden style={{ fontSize: 16 }}>{item.glyph}</span>
-            <NavIcon name={item.icon} />
-            <span>{t(item.labelKey)}</span>
+            <Icon size={20} strokeWidth={screen === target ? 2.2 : 1.8} aria-hidden />
+            <span>{t(labelKey)}</span>
             <span className="dot" />
           </button>
         ))}
@@ -95,7 +84,8 @@ export function AskAIFab() {
   if (screen === 'onboarding' || screen === 'setup' || screen === 'ai') return null
   return (
     <button className="fab-ai" onClick={() => goTo('ai')}>
-      💬 {t('askAI')}
+      <MessageSquare size={15} aria-hidden />
+      {t('askAI')}
     </button>
   )
 }

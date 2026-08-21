@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, Check, Mic, Sparkles, WandSparkles } from 'lucide-react'
+import clsx from 'clsx'
 import { useApp } from '../context/AppContext'
 import { describeApiError } from '../hooks/useApiResource'
 import { parseTransaction, type ParsedTransaction } from '../services/api'
@@ -35,8 +37,8 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
 }
 
 const EXAMPLES = {
-  en: 'e.g. "sold 3 plates of jollof for 4500"',
-  pcm: 'e.g. "I sell 3 plate jollof for 4500"',
+  en: '“sold 3 plates of jollof for 4500”',
+  pcm: '“I sell 3 plate jollof for 4500”',
 }
 
 interface Props {
@@ -139,78 +141,99 @@ export function TypeOrTalk({ onParsed }: Props) {
   if (!businessId) return null
 
   return (
-    <div className="card stack" style={{ gap: 10 }}>
-      <div className="stack" style={{ gap: 2 }}>
-        <span className="eyebrow">
-          {lang === 'pcm' ? 'Type or Talk (AI Pre-fill)' : 'Type or Talk (AI Pre-fill)'}
-        </span>
-        <span style={{ fontSize: 12, color: 'var(--grey)' }}>
-          {lang === 'pcm' ? EXAMPLES.pcm : EXAMPLES.en}
-        </span>
-      </div>
+    <div className={clsx('ai-input-shell', busy && 'parsing')}>
+      <div className="ai-input-inner stack" style={{ gap: 14 }}>
+        <div className="row-between">
+          <div className="row" style={{ gap: 8 }}>
+            <Sparkles size={15} color="var(--purple-mid)" aria-hidden />
+            <span className="eyebrow" style={{ margin: 0 }}>
+              {lang === 'pcm' ? 'Type or Talk' : 'Type or Talk'}
+            </span>
+          </div>
+          <span className="chip chip-purple">{lang === 'pcm' ? 'AI PRE-FILL' : 'AI PRE-FILL'}</span>
+        </div>
 
-      <form
-        className="row"
-        style={{ gap: 8 }}
-        onSubmit={(e) => {
-          e.preventDefault()
-          void runParse(text)
-        }}
-      >
-        <input
-          className="input-field"
-          placeholder={lang === 'pcm' ? 'Talk am or type am...' : 'Describe the transaction...'}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          disabled={busy || listening}
-          aria-label={lang === 'pcm' ? 'Describe your transaction' : 'Describe your transaction'}
-        />
-        <button
-          className="btn-primary"
-          style={{ width: 'auto', padding: '13px 16px' }}
-          type="submit"
-          disabled={busy || listening || !text.trim()}
+        <form
+          className="row"
+          style={{ gap: 8 }}
+          onSubmit={(e) => {
+            e.preventDefault()
+            void runParse(text)
+          }}
         >
-          {lang === 'pcm' ? 'Parse' : 'Parse'}
-        </button>
-      </form>
-
-      <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-        {SpeechCtor && (
-          <button
-            className={`suggestion-chip ${listening ? 'mic-live' : ''}`}
-            onClick={startListening}
+          <input
+            className="input-field"
+            placeholder={lang === 'pcm' ? 'Talk am or type am...' : 'Describe the transaction...'}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
             disabled={busy || listening}
-            type="button"
+            aria-label={lang === 'pcm' ? 'Describe your transaction' : 'Describe your transaction'}
+          />
+          <button
+            className="btn-primary"
+            style={{ width: 'auto', padding: '13px 18px', flex: '0 0 auto' }}
+            type="submit"
+            disabled={busy || listening || !text.trim()}
           >
-            {listening
-              ? lang === 'pcm'
-                ? '🎤 I dey listen...'
-                : '🎤 Listening...'
-              : lang === 'pcm'
-                ? '🎤 Speak'
-                : '🎤 Speak'}
+            <span className="row" style={{ gap: 7 }}>
+              <WandSparkles size={15} aria-hidden />
+              {lang === 'pcm' ? 'Parse' : 'Parse'}
+            </span>
           </button>
-        )}
-        {busy && (
-          <span className="row" style={{ gap: 8, alignItems: 'center' }}>
-            <span className="spinner" aria-hidden />
-            <span style={{ fontSize: 12.5, color: 'var(--grey)' }}>
+        </form>
+
+        <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+          {SpeechCtor && (
+            <button
+              className={clsx('mic-btn', listening && 'listening')}
+              onClick={startListening}
+              disabled={busy || listening}
+              type="button"
+            >
+              <Mic size={15} aria-hidden />
+              {listening
+                ? lang === 'pcm'
+                  ? 'I dey listen...'
+                  : 'Listening...'
+                : lang === 'pcm'
+                  ? 'Speak'
+                  : 'Speak'}
+            </button>
+          )}
+
+          {busy ? (
+            <span style={{ fontSize: 12.5, color: 'var(--purple-mid)', fontWeight: 600 }}>
               {lang === 'pcm' ? 'AI dey read am...' : 'Reading it...'}
             </span>
-          </span>
+          ) : (
+            !listening &&
+            !error &&
+            !filled && (
+              <span style={{ fontSize: 12, color: 'var(--grey)' }}>
+                {lang === 'pcm' ? EXAMPLES.pcm : EXAMPLES.en}
+              </span>
+            )
+          )}
+        </div>
+
+        {error && (
+          <div className="row" style={{ gap: 7, alignItems: 'flex-start' }}>
+            <AlertTriangle size={14} color="var(--red)" aria-hidden style={{ flex: '0 0 auto', marginTop: 2 }} />
+            <p style={{ fontSize: 12.5, color: 'var(--red)' }}>{error}</p>
+          </div>
+        )}
+
+        {filled && (
+          <div className="row" style={{ gap: 7, alignItems: 'flex-start' }}>
+            <Check size={14} color="var(--green)" aria-hidden style={{ flex: '0 0 auto', marginTop: 2 }} />
+            <p style={{ fontSize: 12.5, color: 'var(--green)' }}>
+              {lang === 'pcm'
+                ? `I don fill the ${filled.type === 'sale' ? 'sale' : 'expense'} form below — check am well, then press save.`
+                : `Filled the ${filled.type} form below — check the values, then save.`}
+            </p>
+          </div>
         )}
       </div>
-
-      {error && <p style={{ fontSize: 12.5, color: 'var(--red)', margin: 0 }}>{error}</p>}
-
-      {filled && (
-        <p style={{ fontSize: 12.5, color: 'var(--green)', margin: 0 }}>
-          {lang === 'pcm'
-            ? `I don fill the ${filled.type === 'sale' ? 'sale' : 'expense'} form below — check am well, then press save.`
-            : `Filled the ${filled.type} form below — check the values, then save.`}
-        </p>
-      )}
     </div>
   )
 }

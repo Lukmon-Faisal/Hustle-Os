@@ -1,8 +1,10 @@
 import { useMemo } from 'react'
+import { motion } from 'framer-motion'
 import { useApp } from '../context/AppContext'
 import { HealthGauge } from '../components/HealthGauge'
 import { InsightCard } from '../components/InsightCard'
 import { DemoAiNotice, ErrorCard, LoadingCard } from '../components/AsyncStates'
+import { listItem, listStagger } from '../components/PageTransition'
 import { useApiResource } from '../hooks/useApiResource'
 import { fetchActions, fetchBusinessHealth, fetchInsights } from '../services/api'
 import { sumSales, sumExpenses, countSales, formatNaira } from '../services/analytics'
@@ -61,7 +63,7 @@ export function Dashboard() {
           {!businessId ? (
             <DemoAiNotice />
           ) : ai.loading ? (
-            <LoadingCard />
+            <LoadingCard variant="dashboard" />
           ) : ai.error ? (
             <ErrorCard detail={ai.error} onRetry={ai.reload} />
           ) : ai.data ? (
@@ -98,11 +100,21 @@ export function Dashboard() {
           {insights.length > 0 && (
             <div className="stack">
               <h2>{t('whatsHappening')}</h2>
-              <div className="stack" style={{ gap: 10 }}>
+              {/* Insights arrive as one batch, so they cascade in rather than
+                  all appearing at once. */}
+              <motion.div
+                className="stack"
+                style={{ gap: 10 }}
+                variants={listStagger}
+                initial="hidden"
+                animate="show"
+              >
                 {insights.map((ins) => (
-                  <InsightCard key={ins.id} insight={ins} />
+                  <motion.div key={ins.id} variants={listItem}>
+                    <InsightCard insight={ins} />
+                  </motion.div>
                 ))}
-              </div>
+              </motion.div>
             </div>
           )}
 

@@ -1,25 +1,49 @@
 :root {
-  --purple-deep: #3D1E6D;
-  --purple-mid: #5B2E9C;
-  --purple-glow: #8B5CF6;
-  --lavender: #EDE7F6;
-  --lavender-soft: #F7F4FC;
-  --white: #FFFFFF;
-  --ink: #16121F;
-  --near-black: #120C22;
-  --near-black-soft: #1B1330;
-  --grey: #7A7488;
-  --grey-light: #E4E0EC;
-  --green: #1C9B6B;
-  --green-bg: #E4F5EE;
-  --amber: #C9822A;
-  --amber-bg: #FBF0DF;
-  --red: #C6483D;
-  --red-bg: #FBE9E7;
+  /* Electric purple, deepened. The gauge, charts and severity bars all read
+     off these, so the whole app re-skins from this block. */
+  --purple-deep: #2E1065;
+  --purple-mid: #6D28D9;
+  --purple-glow: #A78BFA;
+  --lavender: #EDE9FE;
+  --lavender-soft: #F5F3FF;
 
-  --radius-lg: 20px;
-  --radius-md: 14px;
-  --radius-sm: 10px;
+  /* Magenta accent for the highest-emphasis moment on a screen. */
+  --magenta: #9F1239;
+  --magenta-soft: #FFF1F2;
+
+  --white: #FFFFFF;
+  --canvas: #F8FAFC;
+  --ink: #0F172A;
+  --ink-soft: #334155;
+  --near-black: #0B1120;
+  --near-black-soft: #16203A;
+  --grey: #64748B;
+  --grey-light: #E2E8F0;
+  --green: #059669;
+  --green-bg: #ECFDF5;
+  --amber: #B45309;
+  --amber-bg: #FFFBEB;
+  --red: #BE123C;
+  --red-bg: #FFF1F2;
+
+  /* Glassmorphism surfaces. */
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(15, 23, 42, 0.07);
+  --glass-bg-dark: rgba(255, 255, 255, 0.06);
+  --glass-border-dark: rgba(255, 255, 255, 0.12);
+  --glass-blur: saturate(180%) blur(18px);
+
+  /* Soft, wide, low-opacity shadows — depth without a visible edge. */
+  --shadow-soft: 0 8px 30px rgba(15, 23, 42, 0.04);
+  --shadow-lift: 0 2px 4px rgba(15, 23, 42, 0.03), 0 14px 40px -12px rgba(46, 16, 101, 0.16);
+  --shadow-hero: 0 20px 60px -20px rgba(46, 16, 101, 0.55);
+
+  --radius-xl: 28px;
+  --radius-lg: 24px;
+  --radius-md: 16px;
+  --radius-sm: 12px;
+
+  --tracking-tight: -0.021em;
 
   --font-display: 'Space Grotesk', 'Inter', sans-serif;
   --font-body: 'Inter', sans-serif;
@@ -38,9 +62,16 @@ html, body, #root {
 body {
   margin: 0;
   font-family: var(--font-body);
-  background: var(--lavender-soft);
+  /* Clean off-white, with two barely-there colour washes so large empty areas
+     have some depth instead of reading as flat grey. */
+  background:
+    radial-gradient(1100px 600px at 12% -10%, rgba(167, 139, 250, 0.11), transparent 60%),
+    radial-gradient(900px 520px at 100% 0%, rgba(159, 18, 57, 0.05), transparent 55%),
+    var(--canvas);
+  background-attachment: fixed;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button, input, select, textarea {
@@ -55,7 +86,7 @@ button {
   max-width: 480px;
   margin: 0 auto;
   min-height: 100vh;
-  background: var(--lavender-soft);
+  background: transparent;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -91,8 +122,8 @@ button {
 }
 
 .eyebrow {
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--purple-mid);
   font-weight: 700;
@@ -103,23 +134,41 @@ h1, h2, h3 {
   font-family: var(--font-display);
   color: var(--ink);
   margin: 0;
+  letter-spacing: var(--tracking-tight);
 }
 
-h1 { font-size: 26px; font-weight: 700; line-height: 1.15; }
-h2 { font-size: 19px; font-weight: 600; }
-h3 { font-size: 15px; font-weight: 600; }
+h1 { font-size: 28px; font-weight: 700; line-height: 1.12; }
+h2 { font-size: 20px; font-weight: 700; line-height: 1.2; }
+h3 { font-size: 15.5px; font-weight: 650; line-height: 1.3; }
 
-p { margin: 0; line-height: 1.5; }
+p { margin: 0; line-height: 1.55; }
 
 .card {
   background: var(--white);
   border-radius: var(--radius-lg);
-  padding: 18px;
-  box-shadow: 0 1px 2px rgba(22, 18, 31, 0.04), 0 8px 24px -18px rgba(61, 30, 109, 0.35);
-  border: 1px solid rgba(61, 30, 109, 0.06);
+  padding: 24px;
+  box-shadow: var(--shadow-soft);
+  border: 1px solid var(--glass-border);
 }
 
-.stack { display: flex; flex-direction: column; gap: 14px; }
+/* Semi-transparent surface for anything layered over the page washes or a
+   photo/gradient backdrop. */
+.glass {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-soft);
+}
+
+.glass-dark {
+  background: var(--glass-bg-dark);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border-dark);
+}
+
+.stack { display: flex; flex-direction: column; gap: 16px; }
 .row { display: flex; align-items: center; gap: 10px; }
 .row-between { display: flex; align-items: center; justify-content: space-between; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -128,7 +177,7 @@ p { margin: 0; line-height: 1.5; }
 .stat-card {
   position: relative;
   overflow: hidden;
-  padding-left: 20px;
+  padding: 20px 20px 20px 24px;
 }
 .stat-card::before {
   content: '';
@@ -136,7 +185,7 @@ p { margin: 0; line-height: 1.5; }
   left: 0;
   top: 0;
   bottom: 0;
-  width: 3px;
+  width: 4px;
   background: var(--accent, var(--purple-mid));
 }
 
@@ -145,49 +194,60 @@ p { margin: 0; line-height: 1.5; }
 }
 
 .health-card {
-  background: linear-gradient(135deg, var(--near-black) 0%, var(--purple-deep) 130%);
-  border: none;
+  background:
+    radial-gradient(120% 140% at 0% 0%, var(--purple-mid) 0%, transparent 55%),
+    linear-gradient(150deg, var(--near-black-soft) 0%, var(--near-black) 60%);
+  border: 1px solid var(--glass-border-dark);
+  box-shadow: var(--shadow-hero);
+  padding: 28px;
   position: relative;
   overflow: hidden;
 }
 .health-card::after {
   content: '';
   position: absolute;
-  top: -60px;
-  right: -60px;
-  width: 200px;
-  height: 200px;
+  top: -70px;
+  right: -70px;
+  width: 220px;
+  height: 220px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(139, 92, 246, 0.35), transparent 70%);
+  background: radial-gradient(circle, rgba(167, 139, 250, 0.4), transparent 70%);
   pointer-events: none;
 }
 .health-card .eyebrow { color: var(--purple-glow); }
 .health-card h1, .health-card h2, .health-card h3, .health-card p { color: var(--white); }
 
 .btn-primary {
-  background: var(--purple-deep);
+  background: linear-gradient(135deg, var(--purple-mid) 0%, var(--purple-deep) 100%);
   color: var(--white);
   border: none;
   border-radius: 999px;
-  padding: 14px 22px;
-  font-weight: 600;
+  padding: 15px 24px;
+  font-weight: 650;
   font-size: 15px;
+  letter-spacing: -0.005em;
   width: 100%;
-  transition: transform 0.15s ease, background 0.15s ease;
+  box-shadow: 0 10px 26px -12px rgba(46, 16, 101, 0.75);
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.18s ease, filter 0.18s ease;
 }
-.btn-primary:hover { background: var(--purple-mid); }
-.btn-primary:active { transform: scale(0.98); }
+.btn-primary:hover { filter: brightness(1.09); box-shadow: 0 14px 32px -12px rgba(46, 16, 101, 0.85); }
+.btn-primary:active { transform: scale(0.985); }
+.btn-primary:disabled { opacity: 0.5; box-shadow: none; filter: none; cursor: not-allowed; }
 
 .btn-secondary {
   background: var(--white);
   color: var(--purple-deep);
-  border: 1.5px solid var(--purple-deep);
+  border: 1.5px solid var(--grey-light);
   border-radius: 999px;
-  padding: 14px 22px;
-  font-weight: 600;
+  padding: 15px 24px;
+  font-weight: 650;
   font-size: 15px;
   width: 100%;
+  box-shadow: var(--shadow-soft);
+  transition: border-color 0.18s ease, transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+.btn-secondary:hover { border-color: var(--purple-glow); }
+.btn-secondary:active { transform: scale(0.985); }
 
 .btn-ghost {
   background: transparent;
@@ -198,20 +258,25 @@ p { margin: 0; line-height: 1.5; }
   padding: 8px 4px;
 }
 
+/* Status badges are always fully-rounded pills with a hairline tint border,
+   so they read as labels rather than filled buttons. */
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 5px 12px;
   border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  border: 1px solid transparent;
+  white-space: nowrap;
 }
-.chip-purple { background: var(--lavender); color: var(--purple-deep); }
-.chip-green { background: var(--green-bg); color: var(--green); }
-.chip-amber { background: var(--amber-bg); color: var(--amber); }
-.chip-red { background: var(--red-bg); color: var(--red); }
-.chip-grey { background: var(--grey-light); color: var(--grey); }
+.chip-purple { background: var(--lavender); color: var(--purple-deep); border-color: rgba(109, 40, 217, 0.16); }
+.chip-green { background: var(--green-bg); color: var(--green); border-color: rgba(5, 150, 105, 0.18); }
+.chip-amber { background: var(--amber-bg); color: var(--amber); border-color: rgba(180, 83, 9, 0.18); }
+.chip-red { background: var(--red-bg); color: var(--red); border-color: rgba(190, 18, 60, 0.18); }
+.chip-grey { background: #F1F5F9; color: var(--grey); border-color: rgba(100, 116, 139, 0.16); }
 
 .severity-bar { width: 4px; border-radius: 4px; align-self: stretch; flex-shrink: 0; }
 .severity-positive { background: var(--green); }
@@ -254,11 +319,14 @@ p { margin: 0; line-height: 1.5; }
 .bottom-nav {
   position: sticky;
   bottom: 0;
-  background: var(--white);
-  border-top: 1px solid var(--grey-light);
+  /* Frosted bar so content scrolls under it rather than hitting a hard edge. */
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border-top: 1px solid var(--glass-border);
   display: flex;
   justify-content: space-around;
-  padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
+  padding: 10px 6px calc(10px + env(safe-area-inset-bottom));
   z-index: 10;
 }
 
@@ -305,7 +373,7 @@ p { margin: 0; line-height: 1.5; }
     font-weight: 700;
     font-size: 15px;
     flex-shrink: 0;
-    box-shadow: 0 6px 16px -6px rgba(139, 92, 246, 0.7);
+    box-shadow: 0 6px 18px -6px rgba(167, 139, 250, 0.75);
   }
   .sidebar-brand .word {
     font-family: var(--font-display);
@@ -412,7 +480,9 @@ p { margin: 0; line-height: 1.5; }
   width: 6px; height: 6px; border-radius: 50%; background: transparent;
 }
 .nav-item.active .dot { background: var(--purple-deep); }
-.nav-item svg { display: none; }
+/* Lucide icons render at both breakpoints now — the old markup hid the SVG on
+   mobile and showed a text glyph instead, which no longer exists. */
+.nav-item svg { display: block; width: 21px; height: 21px; flex-shrink: 0; }
 
 @media (min-width: 900px) {
   .nav-item {
@@ -425,8 +495,7 @@ p { margin: 0; line-height: 1.5; }
     transition: background 0.15s ease, color 0.15s ease;
   }
   .nav-item:hover { background: rgba(255, 255, 255, 0.05); color: var(--white); }
-  .nav-item.active { background: rgba(139, 92, 246, 0.16); color: var(--white); }
-  .nav-item .icon-glyph { display: none; }
+  .nav-item.active { background: rgba(167, 139, 250, 0.18); color: var(--white); }
   .nav-item svg { display: block; width: 18px; height: 18px; flex-shrink: 0; }
   .nav-item .dot { display: none; }
 }
@@ -435,17 +504,22 @@ p { margin: 0; line-height: 1.5; }
   position: fixed;
   right: 18px;
   bottom: 84px;
-  background: var(--purple-deep);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: linear-gradient(135deg, var(--purple-mid) 0%, var(--purple-deep) 100%);
   color: var(--white);
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 999px;
-  padding: 13px 18px;
-  font-weight: 700;
+  padding: 13px 20px;
+  font-weight: 650;
   font-size: 13px;
-  box-shadow: 0 10px 24px -8px rgba(61, 30, 109, 0.55);
+  box-shadow: 0 12px 30px -10px rgba(46, 16, 101, 0.75);
   z-index: 20;
   max-width: 480px;
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.18s ease;
 }
+.fab-ai:hover { transform: translateY(-2px); box-shadow: 0 16px 36px -10px rgba(46, 16, 101, 0.85); }
 
 @media (min-width: 900px) {
   .fab-ai { right: 40px; bottom: 40px; }
@@ -472,18 +546,22 @@ p { margin: 0; line-height: 1.5; }
 
 .input-field {
   width: 100%;
-  padding: 13px 14px;
+  padding: 14px 16px;
   border-radius: var(--radius-md);
   border: 1.5px solid var(--grey-light);
   font-size: 15px;
   background: var(--white);
   color: var(--ink);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
+.input-field::placeholder { color: #94A3B8; }
+.input-field:hover { border-color: #CBD5E1; }
 .input-field:focus {
-  outline: 2px solid var(--purple-mid);
-  outline-offset: 1px;
+  outline: none;
   border-color: var(--purple-mid);
+  box-shadow: 0 0 0 4px rgba(109, 40, 217, 0.13);
 }
+.input-field:disabled { background: #F8FAFC; color: var(--grey); }
 .field-label {
   font-size: 13px;
   font-weight: 600;
@@ -544,27 +622,107 @@ p { margin: 0; line-height: 1.5; }
 
 a { color: var(--purple-deep); }
 
-/* Inline busy indicator. Always paired with text, because the reduced-motion
-   rule below freezes the animation and a still ring says nothing on its own. */
-.spinner {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--lavender);
-  border-top-color: var(--purple-mid);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex: 0 0 auto;
+/* ---------------------------------------------------------------------------
+   Skeleton loaders. These replace spinners entirely: a block the size of the
+   real content means data arriving causes no layout shift.
+   --------------------------------------------------------------------------- */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: #EEF2F7;
+  border-radius: var(--radius-sm);
+  animation: skeleton-pulse 1.8s ease-in-out infinite;
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+  animation: skeleton-sweep 1.6s ease-in-out infinite;
+}
+.skeleton-text { height: 12px; border-radius: 999px; }
+.skeleton-title { height: 20px; border-radius: 8px; }
+.skeleton-circle { border-radius: 50%; }
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.62; }
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+@keyframes skeleton-sweep {
+  to { transform: translateX(100%); }
 }
 
-/* Mic button while the Web Speech API is actively listening. */
-.mic-live {
-  border-color: var(--red);
-  color: var(--red);
+/* ---------------------------------------------------------------------------
+   "Type or Talk" — the demo hero.
+   --------------------------------------------------------------------------- */
+
+/* Gradient-border shell. The border is a gradient painted underneath an inset
+   white layer, which is why the padding/background pair looks odd but works
+   without a wrapper element per side. */
+.ai-input-shell {
+  position: relative;
+  border-radius: var(--radius-lg);
+  padding: 1.5px;
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.55), rgba(159, 18, 57, 0.28), rgba(167, 139, 250, 0.55));
+  background-size: 200% 100%;
+  transition: box-shadow 0.25s ease;
+}
+.ai-input-shell > .ai-input-inner {
+  background: var(--white);
+  border-radius: calc(var(--radius-lg) - 2px);
+  padding: 22px;
+}
+/* While the model is parsing, the gradient sweeps and the shell lifts. */
+.ai-input-shell.parsing {
+  animation: shimmer-border 1.5s linear infinite;
+  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.12), var(--shadow-lift);
+}
+
+@keyframes shimmer-border {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+.mic-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  border: 1.5px solid var(--grey-light);
+  background: var(--white);
+  color: var(--purple-deep);
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 650;
+  transition: border-color 0.18s ease, transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.mic-btn:hover:not(:disabled) { border-color: var(--purple-glow); transform: translateY(-1px); }
+.mic-btn:disabled { cursor: not-allowed; }
+
+/* Listening: the button turns magenta and emits an expanding ring. The ring is
+   a pseudo-element so it can scale past the button without affecting layout. */
+.mic-btn.listening {
+  border-color: var(--magenta);
+  color: var(--magenta);
+  background: var(--magenta-soft);
+}
+.mic-btn.listening::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  border: 2px solid var(--magenta);
+  animation: pulse-ring 1.5s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.75; }
+  70% { transform: scale(1.22); opacity: 0; }
+  100% { transform: scale(1.22); opacity: 0; }
 }
 
 :focus-visible {
