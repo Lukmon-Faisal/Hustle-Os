@@ -5,4 +5,9 @@ psycopg2-binary==2.9.9
 pydantic==2.9.2
 python-dotenv==1.0.1
 anthropic==1.0.0
+twilio==9.11.0
+# Required by FastAPI's Form(...) parsing for the Twilio webhook, which posts
+# x-www-form-urlencoded. Without it the whole app raises on import, not just
+# that one route.
+python-multipart==0.0.20
 

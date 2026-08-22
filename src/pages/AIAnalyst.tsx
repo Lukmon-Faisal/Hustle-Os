@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { ArrowUp } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { DemoAiNotice, ErrorCard } from '../components/AsyncStates'
 import { describeApiError, useApiResource } from '../hooks/useApiResource'
@@ -183,7 +184,9 @@ export function AIAnalyst() {
           onChange={(e) => setInput(e.target.value)}
           aria-label="Ask HUSTLE AI"
         />
-        <button className="btn-primary" style={{ width: 'auto', padding: '13px 18px' }} type="submit" disabled={thinking}>↑</button>
+        <button className="btn-primary" style={{ width: 'auto', padding: '13px 18px' }} type="submit" disabled={thinking}>
+          <ArrowUp size={17} aria-hidden />
+        </button>
       </form>
     </div>
   )

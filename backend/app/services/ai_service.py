@@ -1,16 +1,22 @@
 import json
+import logging
 import os
 import re
+from datetime import datetime, timezone
 
 import anthropic
 from fastapi import HTTPException
 
 from app.services.analytics import (
     period_over_period, sales_by_product, product_growth, expenses_by_category,
-    repeat_customer_rate, inventory_days_remaining, supplier_price_change
+    repeat_customer_rate, inventory_days_remaining, supplier_price_change,
+    daily_series, active_sales_days
 )
 from app.models.inventory import InventoryItem
+from app.models.product import Product
 from app.models.supplier import Supplier
+
+log = logging.getLogger(__name__)
 
 def money(n): return f"₦{n:,.0f}"
 def clamp(n): return max(5,min(98,round(n)))
@@ -25,6 +31,16 @@ SUPPLIER_INSIGHT_PCT = 5
 PRODUCT_GROWTH_PCT = 5
 MAX_GROWTH_INSIGHTS = 2
 MAX_SUPPLIER_INSIGHTS = 2
+
+# --- passport / lending contract -------------------------------------------
+# Deliberately explicit: an underwriter has to be able to read the policy off
+# the code, and a tier that moves because a constant was buried inline is not
+# an explainable credit decision.
+PASSPORT_WINDOW_DAYS = 30
+CREDIT_LIMIT_RATIO = 0.30      # conservative share of 30-day gross revenue
+EXPENSE_CV_HIGH = 0.35         # coefficient of variation at or under this = "High"
+EXPENSE_CV_MEDIUM = 0.75       # ...and at or under this = "Medium"
+MIN_EXPENSE_DAYS_FOR_CV = 3    # below this, variance is not meaningful
 
 # --- /ask LLM configuration ------------------------------------------------
 # claude-3-5-haiku-20241022 was retired 2026-02-19; claude-haiku-4-5 is the
@@ -49,6 +65,97 @@ ASK_SCHEMA = {
         "recommendation": {"type": "string", "description": "What to do next."},
     },
     "required": ["fact", "inference", "recommendation"],
+    "additionalProperties": False,
+}
+
+# --- /insights narration configuration -------------------------------------
+NARRATE_MODEL = ASK_MODEL          # same fast tier; both paths are latency-sensitive
+NARRATE_MAX_TOKENS = 4096
+
+# Only the prose is the model's job. `id`, `kind` and `severity` stay
+# deterministic: InsightCard.tsx does KIND_LABEL[insight.kind][lang], so a kind
+# outside the frontend's union is `undefined[lang]` — a TypeError that takes the
+# whole Dashboard render down. Severity drives a CSS class and id is a React
+# key, so those are not the model's to guess either.
+NARRATION_KEYS = ("title", "titlePidgin", "detail", "detailPidgin")
+
+NARRATE_SYSTEM = (
+    "You are Hustle OS, an AI business analyst for Nigerian informal vendors. Your job is "
+    "to narrate financial data into warm, natural Nigerian Pidgin. Do not hallucinate "
+    "numbers. You must return ONLY a raw JSON array of objects, with no markdown "
+    "formatting, no backticks, and no preamble. The JSON keys MUST exactly match this "
+    'structure for each item: {"id": string, "title": string, "titlePidgin": string, '
+    '"detail": string, "detailPidgin": string}. '
+    "Return the array under the key \"insights\". Echo each trigger's id back exactly as "
+    "given so each narration can be matched to its trigger. `title` and `detail` are "
+    "English; `titlePidgin` and `detailPidgin` are Nigerian Pidgin — not translations of "
+    "each other word for word, but the same point said naturally in each. Keep titles "
+    "under 12 words and details to one or two sentences. Use only figures that appear in "
+    "that trigger's `facts`, and let its `tone` set how urgent you sound."
+)
+
+NARRATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "insights": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "titlePidgin": {"type": "string"},
+                    "detail": {"type": "string"},
+                    "detailPidgin": {"type": "string"},
+                },
+                "required": ["id", "title", "titlePidgin", "detail", "detailPidgin"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["insights"],
+    "additionalProperties": False,
+}
+
+# --- /parse-transaction configuration --------------------------------------
+PARSE_MAX_TOKENS = 512
+# How far back to mine sale history for names the vendor already uses, and how
+# many to send. The cap keeps the prompt bounded for a business with a long tail
+# of one-off products.
+PRODUCT_HISTORY_DAYS = 90
+MAX_KNOWN_PRODUCTS = 60
+
+PARSE_SYSTEM = (
+    "You are an entity extraction engine for a Nigerian business app. The user will "
+    "provide a natural language string, often in Nigerian Pidgin, describing a business "
+    "transaction. Extract the data and return ONLY raw JSON matching this schema exactly: "
+    "{ 'type': 'sale' or 'expense', 'item_name': string, 'amount': number, "
+    "'quantity': number (default to 1) }. Do not include markdown or backticks."
+    "\n\n"
+    "NAMING THE ITEM. item_name is always a clean standard name: Title Case, singular, "
+    "no quantity, no unit, no verb, no serving word. Containers and servings are never "
+    "part of the name — 'I buy 3 bag of cement' gives 'Cement', 'two plates of moin moin' "
+    "gives 'Moin Moin'. "
+    "This holds whether or not a list of KNOWN ITEMS is supplied, because the first "
+    "transaction a new business records becomes the spelling everything later matches to."
+    "\n\n"
+    "When the message DOES list KNOWN ITEMS and the phrase plainly refers to one of them, "
+    "that overrides the rule above: copy the known item EXACTLY — character for character, "
+    "same spelling and capitalisation. Do not re-spell it, re-case it, pluralise it, or "
+    "bolt units onto it. 'plate of jollof', '3 plates jollof rice' and 'jollof' all refer "
+    "to the known item 'Jollof Rice'; 'two bags of rice' refers to the known item 'Rice'. "
+    "Invent a new name only when the phrase clearly refers to something absent from the list."
+)
+
+PARSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "type": {"type": "string", "enum": ["sale", "expense"]},
+        "item_name": {"type": "string"},
+        "amount": {"type": "number"},
+        "quantity": {"type": "number"},
+    },
+    "required": ["type", "item_name", "amount", "quantity"],
     "additionalProperties": False,
 }
 
@@ -102,26 +209,158 @@ def health(db,bid):
     else: s="Your business needs attention in more than one area right now."; sp="Your business need attention for more than one area now."
     return {"overall":overall,"components":comps,"summary":s,"summaryPidgin":sp}
 
-def insights(db,bid):
+def _insight_triggers(db,bid):
+    """The deterministic half of insights(): every trigger the math fires, with
+    the raw figures behind it and ready-made prose.
+
+    `kind`/`severity` are decided here, never by the model. `facts` is the only
+    thing the narrator may quote numbers from. `fallback` is the Phase-1 wording,
+    used verbatim whenever narration is unavailable — so the Dashboard degrades
+    to plainer English rather than to nothing."""
     out=[]; p=period_over_period(db,bid,30)
     tops=sorted(sales_by_product(db,bid,30),key=lambda x:x["revenue"],reverse=True)
 
     if tops:
         t=tops[0]
-        out.append({"id":"top-product","kind":"fact","title":f"{t['product']} is your top earner this month","titlePidgin":f"{t['product']} na your number one product this month","detail":f"It brought in {money(t['revenue'])} across {t['qty']} units sold.","detailPidgin":f"E bring {money(t['revenue'])} from {t['qty']} units wey sell.","severity":"neutral"})
+        out.append({
+          "id":"top-product","kind":"fact","severity":"neutral","topic":"top_selling_product",
+          "facts":{"product":t["product"],"revenue_ngn":round(t["revenue"],2),"units_sold":t["qty"],"period_days":30},
+          "fallback":{
+            "title":f"{t['product']} is your top earner this month",
+            "titlePidgin":f"{t['product']} na your number one product this month",
+            "detail":f"It brought in {money(t['revenue'])} across {t['qty']} units sold.",
+            "detailPidgin":f"E bring {money(t['revenue'])} from {t['qty']} units wey sell.",
+          },
+        })
 
     for i,(name,g) in enumerate(_growing_products(db,bid)[:MAX_GROWTH_INSIGHTS]):
-        out.append({"id":f"growth-{i}-{_slug(name)}","kind":"fact","title":f"{name} sales are up {round(g['changePct'])}% this month","titlePidgin":f"{name} sales don increase {round(g['changePct'])}%","detail":f"{name} brought in {money(g['now'])} in the last 30 days, up from {money(g['prev'])}.","detailPidgin":f"{name} bring {money(g['now'])} for the last 30 days, e pass the {money(g['prev'])} of before.","severity":"positive"})
+        out.append({
+          "id":f"growth-{i}-{_slug(name)}","kind":"fact","severity":"positive","topic":"product_growing",
+          "facts":{"product":name,"revenue_now_ngn":round(g["now"],2),"revenue_previous_ngn":round(g["prev"],2),"change_pct":round(g["changePct"],1),"period_days":30},
+          "fallback":{
+            "title":f"{name} sales are up {round(g['changePct'])}% this month",
+            "titlePidgin":f"{name} sales don increase {round(g['changePct'])}%",
+            "detail":f"{name} brought in {money(g['now'])} in the last 30 days, up from {money(g['prev'])}.",
+            "detailPidgin":f"{name} bring {money(g['now'])} for the last 30 days, e pass the {money(g['prev'])} of before.",
+          },
+        })
 
     rr=repeat_customer_rate(db,bid)
-    if rr>0: out.append({"id":"repeat-customers","kind":"fact","title":f"{rr}% of your customers came back this period","titlePidgin":f"{rr}% of your customers come back","detail":"Repeat customers are a strong share of your order volume.","detailPidgin":"Repeat customers dey drive plenty of your orders.","severity":"positive"})
+    if rr>0:
+        out.append({
+          "id":"repeat-customers","kind":"fact","severity":"positive","topic":"repeat_customers",
+          "facts":{"repeat_customer_rate_pct":rr,"period_days":30},
+          "fallback":{
+            "title":f"{rr}% of your customers came back this period",
+            "titlePidgin":f"{rr}% of your customers come back",
+            "detail":"Repeat customers are a strong share of your order volume.",
+            "detailPidgin":"Repeat customers dey drive plenty of your orders.",
+          },
+        })
 
     for i,(s,ch) in enumerate([x for x in _price_rises(db,bid) if x[1]["changePct"]>=SUPPLIER_INSIGHT_PCT][:MAX_SUPPLIER_INSIGHTS]):
-        out.append({"id":f"supplier-{i}-{_slug(s.name)}","kind":"fact","title":f"Your {s.category} cost from {s.name} rose {round(ch['changePct'])}%","titlePidgin":f"{s.name} price for {s.category} don increase {round(ch['changePct'])}%","detail":f"{s.name}'s unit price moved from {money(ch['first'])} to {money(ch['last'])}.","detailPidgin":f"{s.name} price change from {money(ch['first'])} to {money(ch['last'])}.","severity":"warning"})
+        out.append({
+          "id":f"supplier-{i}-{_slug(s.name)}","kind":"fact","severity":"warning","topic":"supplier_price_rise",
+          "facts":{"supplier":s.name,"category":s.category,"first_price_ngn":ch["first"],"last_price_ngn":ch["last"],"change_pct":round(ch["changePct"],1)},
+          "fallback":{
+            "title":f"Your {s.category} cost from {s.name} rose {round(ch['changePct'])}%",
+            "titlePidgin":f"{s.name} price for {s.category} don increase {round(ch['changePct'])}%",
+            "detail":f"{s.name}'s unit price moved from {money(ch['first'])} to {money(ch['last'])}.",
+            "detailPidgin":f"{s.name} price change from {money(ch['first'])} to {money(ch['last'])}.",
+          },
+        })
+
+    if p["revenueChangePct"]<0:
+        drop=abs(round(p["revenueChangePct"]))
+        out.append({
+          "id":"revenue-drop","kind":"inference","severity":"warning","topic":"revenue_declined",
+          "facts":{"revenue_now_ngn":round(p["revenueNow"],2),"revenue_previous_ngn":round(p["revenuePrev"],2),"change_pct":round(p["revenueChangePct"],1),"period_days":30},
+          "fallback":{
+            "title":f"Revenue fell {drop}% compared with the previous 30 days",
+            "titlePidgin":f"Money wey enter reduce {drop}% pass the last 30 days",
+            "detail":f"Sales brought in {money(p['revenueNow'])}, down from {money(p['revenuePrev'])}.",
+            "detailPidgin":f"Sales bring {money(p['revenueNow'])}, e reduce from {money(p['revenuePrev'])}.",
+          },
+        })
 
     if p["expenseChangePct"]>p["revenueChangePct"]:
-        out.append({"id":"expenses-outpacing","kind":"inference","title":"Expenses are growing faster than revenue","titlePidgin":"Expenses dey rise pass the money wey dey enter","detail":f"Revenue moved {round(p['revenueChangePct'])}% while expenses moved {round(p['expenseChangePct'])}%.","detailPidgin":"Money wey enter change, but expenses dey rise faster.","severity":"warning"})
+        out.append({
+          "id":"expenses-outpacing","kind":"inference","severity":"warning","topic":"expenses_outpacing_revenue",
+          "facts":{"revenue_change_pct":round(p["revenueChangePct"],1),"expense_change_pct":round(p["expenseChangePct"],1),"period_days":30},
+          "fallback":{
+            "title":"Expenses are growing faster than revenue",
+            "titlePidgin":"Expenses dey rise pass the money wey dey enter",
+            "detail":f"Revenue moved {round(p['revenueChangePct'])}% while expenses moved {round(p['expenseChangePct'])}%.",
+            "detailPidgin":"Money wey enter change, but expenses dey rise faster.",
+          },
+        })
 
+    return out
+
+def _narrate(triggers):
+    """Narrate every trigger in ONE batch call.
+
+    Returns {trigger_id: {narration keys}}. Any failure — missing key, network,
+    rate limit, malformed JSON — returns {} so insights() falls back to the
+    deterministic prose. The except is deliberately broad: unlike /ask, which is
+    user-initiated and should surface its error, this runs on every Dashboard
+    load and must never be the reason the page fails to render."""
+    api_key=os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        log.warning("ANTHROPIC_API_KEY is not set — serving deterministic insight text.")
+        return {}
+
+    payload=[{"id":t["id"],"topic":t["topic"],"tone":t["severity"],"facts":t["facts"]} for t in triggers]
+    try:
+        client=anthropic.Anthropic(api_key=api_key)
+        resp=client.messages.create(
+            model=NARRATE_MODEL,
+            max_tokens=NARRATE_MAX_TOKENS,
+            system=NARRATE_SYSTEM,
+            messages=[{"role":"user","content":(
+                f"Narrate these {len(payload)} triggers — exactly one object per trigger, "
+                "keeping each trigger's id:\n\n"
+                f"{json.dumps(payload,ensure_ascii=False,indent=2)}"
+            )}],
+            output_config={"format":{"type":"json_schema","schema":NARRATE_SCHEMA}},
+        )
+        data=json.loads(_strip_fence(next((b.text for b in resp.content if b.type=="text"),"")))
+        rows=data.get("insights") if isinstance(data,dict) else data
+        narrated={}
+        for r in rows or []:
+            rid=str(r.get("id") or "")
+            if rid:
+                narrated[rid]={k:str(r.get(k) or "").strip() for k in NARRATION_KEYS}
+        missing=[t["id"] for t in triggers if t["id"] not in narrated]
+        if missing:
+            log.warning("Narration missing for %s — using deterministic text for those.", missing)
+        return narrated
+    except Exception:
+        log.exception("Insight narration failed — falling back to deterministic text.")
+        return {}
+
+def insights(db,bid):
+    triggers=_insight_triggers(db,bid)
+    if not triggers:
+        return []
+
+    narrated=_narrate(triggers)
+    out=[]
+    for t in triggers:
+        n=narrated.get(t["id"]) or {}
+        fb=t["fallback"]
+        # Key order mirrors the Insight interface in src/types/index.ts. Prose
+        # comes from the model when present, deterministic text otherwise; the
+        # enums and the id always come from the trigger.
+        out.append({
+          "id":t["id"],
+          "kind":t["kind"],
+          "title":n.get("title") or fb["title"],
+          "titlePidgin":n.get("titlePidgin") or fb["titlePidgin"],
+          "detail":n.get("detail") or fb["detail"],
+          "detailPidgin":n.get("detailPidgin") or fb["detailPidgin"],
+          "severity":t["severity"],
+        })
     return out
 
 def anomalies(db,bid):
@@ -151,36 +390,66 @@ def actions(db,bid):
 
     return out
 
-def passport(db,bid):
-    from app.models.business import Business
-    b=db.get(Business,bid); p30=period_over_period(db,bid,30); p90=period_over_period(db,bid,90)
-    rr=repeat_customer_rate(db,bid)
-    sales_count=len(b.sales)
+def _expense_stability_index(db,bid,days=PASSPORT_WINDOW_DAYS):
+    """Volatility of daily expense totals, as an explainable three-way index.
+
+    Uses the coefficient of variation across the days that actually recorded
+    expenses. Vendors buy in bursts — a weekly restock means most days are
+    legitimately zero — so treating empty days as data would mark nearly every
+    honest business unstable. Below MIN_EXPENSE_DAYS_FOR_CV there is not enough
+    signal to speak to variance, so fall back to how far expense growth has
+    diverged from revenue growth over the same window."""
+    vals=[r["expenses"] for r in daily_series(db,bid,days) if r["expenses"]>0]
+    if len(vals)>=MIN_EXPENSE_DAYS_FOR_CV:
+        mean=sum(vals)/len(vals)
+        if mean>0:
+            cv=(sum((v-mean)**2 for v in vals)/len(vals))**0.5/mean
+            if cv<=EXPENSE_CV_HIGH: return "High"
+            if cv<=EXPENSE_CV_MEDIUM: return "Medium"
+            return "Low"
+    p=period_over_period(db,bid,days)
+    gap=abs(p["expenseChangePct"]-p["revenueChangePct"])
+    if gap<5: return "High"
+    if gap<20: return "Medium"
+    return "Low"
+
+def _inventory_health_status(db,bid):
+    """Phase-1 share-at-risk rule, mapped onto the lending contract's wording.
+
+    Averaging cover would let one well-stocked line hide a line that runs out
+    tomorrow, so this counts the share of lines inside the reorder window. With
+    no measurable inventory there is nothing to verify in either direction —
+    reporting 'Excellent' off the back of no data would overstate the business
+    to an underwriter, so unverifiable lands in the middle."""
     cover=_stock_cover(db,bid)
-    # Share of stock lines about to run out, rather than average cover:
-    # averaging lets one well-stocked item hide an item that runs out tomorrow,
-    # and this rating is meant as evidence about how the business is really run.
+    if not cover: return "Needs Work"
     at_risk=sum(1 for _,d in cover if d<=LOW_STOCK_ACTION_DAYS)
-    if not cover: inv_eff="Good"
-    elif at_risk==0: inv_eff="Excellent"
-    elif at_risk/len(cover)<=0.5: inv_eff="Good"
-    else: inv_eff="Needs work"
+    if at_risk==0: return "Excellent"
+    if at_risk/len(cover)<=0.5: return "Needs Work"
+    return "Critical"
+
+def passport(db,bid):
+    """Deterministic credit passport. Same rows in, same payload out — the only
+    field that moves between identical calls is last_calculated_at."""
+    revenue=round(period_over_period(db,bid,PASSPORT_WINDOW_DAYS)["revenueNow"],2)
+    active_days=active_sales_days(db,bid,PASSPORT_WINDOW_DAYS)
+    score=round(active_days/PASSPORT_WINDOW_DAYS*100)
+
+    if score>80 and revenue>0: tier="A"
+    elif score>50: tier="B"
+    elif score>20: tier="C"
+    else: tier="D"
+
     return {
-      "businessName":b.name,"operatingHistoryMonths":b.years_operating*12,
-      "verifiedActivityMonths":min(b.years_operating*12,14),
-      "revenueConsistency":"Strong" if p90["revenueChangePct"]>=10 else ("Moderate" if p90["revenueChangePct"]>=0 else "Weak"),
-      "transactionConsistency":"Strong" if sales_count>800 else ("Moderate" if sales_count>300 else "Weak"),
-      "customerRetentionPct":rr,
-      "expenseStability":"Strong" if abs(p30["expenseChangePct"]-p30["revenueChangePct"])<5 else ("Moderate" if abs(p30["expenseChangePct"]-p30["revenueChangePct"])<20 else "Weak"),
-      "inventoryEfficiency":inv_eff,
-      "cashFlowHealth":"Strong" if p30["profitNow"]>p30["profitPrev"] else ("Moderate" if p30["profitNow"]>0 else "Weak"),
-      "signals":[
-        {"label":"Business activity verified","verified":sales_count>0},
-        {"label":"Transaction history available","verified":sales_count>0},
-        {"label":"Revenue pattern available","verified":sales_count>20},
-        {"label":"Customer activity available","verified":len(b.customers)>0},
-        {"label":"Invoice/payment history available","verified":len(b.invoices)>0},
-      ]
+      "credit_risk_tier":tier,
+      "recommended_credit_limit_ngn":round(revenue*CREDIT_LIMIT_RATIO,2),
+      "thirty_day_gross_revenue":revenue,
+      "transaction_consistency_score":score,
+      "expense_stability_index":_expense_stability_index(db,bid),
+      "inventory_health_status":_inventory_health_status(db,bid),
+      # Fixed true pending a real KYC integration — see schemas/passport.py.
+      "kyc_data_verifiability":True,
+      "last_calculated_at":datetime.now(timezone.utc).isoformat(),
     }
 
 def ask_context(db,bid,days=30):
@@ -215,28 +484,25 @@ def _strip_fence(t):
         t=re.sub(r"\s*```$","",t)
     return t.strip()
 
-def answer(db,bid,question):
+def _llm_json(system,user_content,schema,max_tokens,purpose):
+    """One Claude call constrained to `schema`, returning parsed JSON.
+
+    Shared by the user-initiated endpoints (/ask, /parse-transaction). These
+    surface failures as HTTP status codes rather than degrading quietly: someone
+    is waiting on this specific answer and can act on the message. Insight
+    narration takes the opposite approach — see _narrate."""
     api_key=os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured on the server.")
-
-    context=ask_context(db,bid)
-    prompt=(
-        "Here is this vendor's financial data for the last 30 days as JSON:\n\n"
-        f"{json.dumps(context,ensure_ascii=False,indent=2)}\n\n"
-        f"The vendor asks: {question}\n\n"
-        "Answer using only the figures above. If the data cannot answer the question, "
-        "say so plainly in the 'fact' field instead of guessing."
-    )
 
     client=anthropic.Anthropic(api_key=api_key)
     try:
         resp=client.messages.create(
             model=ASK_MODEL,
-            max_tokens=ASK_MAX_TOKENS,
-            system=ASK_SYSTEM,
-            messages=[{"role":"user","content":prompt}],
-            output_config={"format":{"type":"json_schema","schema":ASK_SCHEMA}},
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role":"user","content":user_content}],
+            output_config={"format":{"type":"json_schema","schema":schema}},
         )
     except anthropic.AuthenticationError:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY was rejected by the Claude API.")
@@ -251,9 +517,20 @@ def answer(db,bid,question):
 
     text=next((b.text for b in resp.content if b.type=="text"),"")
     try:
-        data=json.loads(_strip_fence(text))
+        return json.loads(_strip_fence(text))
     except json.JSONDecodeError:
-        raise HTTPException(status_code=502, detail="The AI analyst returned a response that was not valid JSON.")
+        raise HTTPException(status_code=502, detail=f"The AI returned a response that was not valid JSON ({purpose}).")
+
+def answer(db,bid,question):
+    context=ask_context(db,bid)
+    prompt=(
+        "Here is this vendor's financial data for the last 30 days as JSON:\n\n"
+        f"{json.dumps(context,ensure_ascii=False,indent=2)}\n\n"
+        f"The vendor asks: {question}\n\n"
+        "Answer using only the figures above. If the data cannot answer the question, "
+        "say so plainly in the 'fact' field instead of guessing."
+    )
+    data=_llm_json(ASK_SYSTEM,prompt,ASK_SCHEMA,ASK_MAX_TOKENS,"chat answer")
 
     fact=str(data.get("fact") or "").strip()
     inference=str(data.get("inference") or "").strip()
@@ -271,4 +548,77 @@ def answer(db,bid,question):
       "fact":fact,
       "inference":inference,
       "recommendation":recommendation,
+    }
+
+def known_product_names(db,bid,days=PRODUCT_HISTORY_DAYS):
+    """Names this business already uses, for the parser to snap a phrase onto.
+
+    Three sources, because a vendor's vocabulary is spread across all of them:
+    the product catalogue, the inventory lines, and whatever strings past sales
+    were actually recorded under. Sale history matters most — that is where
+    `sales_by_product` groups, so those are the exact spellings a new row has to
+    match to avoid splitting a product in two.
+
+    Deduped case-insensitively, keeping the first spelling seen, so the
+    catalogue's capitalisation wins over a sloppier historical one."""
+    seen={}
+    def add(name):
+        n=(name or "").strip()
+        if n and n.lower() not in seen:
+            seen[n.lower()]=n
+    for p in db.query(Product).filter(Product.business_id==bid).all():
+        add(p.name)
+    for it in _items(db,bid):
+        add(it.name)
+    for row in sales_by_product(db,bid,days):
+        add(row["product"])
+    return list(seen.values())[:MAX_KNOWN_PRODUCTS]
+
+def parse_transaction(text,existing_products=None):
+    """Extract a transaction from a spoken or typed phrase.
+
+    `existing_products` is the vendor's current vocabulary (see
+    known_product_names). Passing it is what stops "plate of jollof", "3 plates
+    jollof rice" and "jollof" from becoming three separate products — every one
+    of those splits `sales_by_product`, and with it the Dashboard insights and
+    the top-earner figure.
+
+    Writes nothing — the client pre-fills its form with this and the vendor still
+    presses Save. Values are coerced and clamped here rather than trusted raw,
+    because these land in money fields: a negative amount or a zero quantity
+    would be a bad row even if the JSON shape was valid."""
+    phrase=(text or "").strip()
+    if not phrase:
+        raise HTTPException(status_code=422, detail="Nothing to parse — say or type the transaction first.")
+
+    # The list goes in the user turn, not the system prompt: it changes per
+    # business and per sale, while PARSE_SYSTEM stays byte-stable.
+    known=[str(p).strip() for p in (existing_products or []) if str(p).strip()]
+    if known:
+        content=(
+            "KNOWN ITEMS for this business — if the transaction refers to one of these, "
+            "copy its name exactly:\n"
+            + "\n".join(f"- {n}" for n in known)
+            + f"\n\nTRANSACTION: {phrase}"
+        )
+    else:
+        content=f"TRANSACTION: {phrase}"
+
+    data=_llm_json(PARSE_SYSTEM,content,PARSE_SCHEMA,PARSE_MAX_TOKENS,"transaction parse")
+
+    kind=data.get("type")
+    if kind not in ("sale","expense"):
+        raise HTTPException(status_code=502, detail="Could not tell whether that was a sale or an expense. Try rephrasing.")
+
+    try:
+        amount=max(0.0,round(float(data.get("amount") or 0),2))
+        quantity=max(1,int(round(float(data.get("quantity") or 1))))
+    except (TypeError,ValueError):
+        raise HTTPException(status_code=502, detail="The extracted amount or quantity was not a number.")
+
+    return {
+      "type":kind,
+      "item_name":str(data.get("item_name") or "").strip(),
+      "amount":amount,
+      "quantity":quantity,
     }

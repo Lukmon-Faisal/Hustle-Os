@@ -323,11 +323,11 @@ interface WireHealth {
 
 interface WirePassport extends Omit<
   BusinessPassport,
-  'operatingHistoryMonths' | 'verifiedActivityMonths' | 'customerRetentionPct'
+  'recommended_credit_limit_ngn' | 'thirty_day_gross_revenue' | 'transaction_consistency_score'
 > {
-  operatingHistoryMonths: string | number
-  verifiedActivityMonths: string | number
-  customerRetentionPct: string | number
+  recommended_credit_limit_ngn: string | number
+  thirty_day_gross_revenue: string | number
+  transaction_consistency_score: string | number
 }
 
 export async function fetchBusinessHealth(businessId: string): Promise<BusinessHealth> {
@@ -361,10 +361,9 @@ export async function fetchPassport(businessId: string): Promise<BusinessPasspor
   const p = await request<WirePassport>(`/businesses/${businessId}/passport`)
   return {
     ...p,
-    operatingHistoryMonths: num(p.operatingHistoryMonths),
-    verifiedActivityMonths: num(p.verifiedActivityMonths),
-    customerRetentionPct: num(p.customerRetentionPct),
-    signals: p.signals ?? [],
+    recommended_credit_limit_ngn: num(p.recommended_credit_limit_ngn),
+    thirty_day_gross_revenue: num(p.thirty_day_gross_revenue),
+    transaction_consistency_score: num(p.transaction_consistency_score),
   }
 }
 
@@ -373,4 +372,32 @@ export async function askQuestion(businessId: string, question: string): Promise
     method: 'POST',
     body: JSON.stringify({ question }),
   })
+}
+
+/**
+ * An extraction result, not a saved record — nothing is written server-side.
+ * Field names are the backend's, which mirrors the extraction schema.
+ */
+export interface ParsedTransaction {
+  type: 'sale' | 'expense'
+  item_name: string
+  amount: number
+  quantity: number
+}
+
+interface WireParsedTransaction extends Omit<ParsedTransaction, 'amount' | 'quantity'> {
+  amount: string | number
+  quantity: string | number
+}
+
+/** businessId is the backend's UUID string, not a numeric id. */
+export async function parseTransaction(
+  businessId: string,
+  text: string,
+): Promise<ParsedTransaction> {
+  const p = await request<WireParsedTransaction>(`/businesses/${businessId}/parse-transaction`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
+  return { ...p, amount: num(p.amount), quantity: num(p.quantity) }
 }

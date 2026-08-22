@@ -17,6 +17,12 @@ class Business(Base):
     location = Column(String, nullable=False)
     years_operating = Column(Integer, nullable=False, default=0)
     main_products = Column(ARRAY(String), nullable=False, default=list)
+    # Links an inbound WhatsApp sender to this business. Stored in E.164
+    # ("+2348012345678") with the "whatsapp:" prefix already stripped. Nullable
+    # because existing businesses predate WhatsApp ingestion; unique so one
+    # number can never resolve to two businesses (Postgres allows many NULLs
+    # under a unique constraint, so unregistered businesses are unaffected).
+    phone_number = Column(String, nullable=True, unique=True, index=True)
 
     sales = relationship("SaleTransaction", back_populates="business", cascade="all, delete-orphan")
     expenses = relationship("ExpenseTransaction", back_populates="business", cascade="all, delete-orphan")

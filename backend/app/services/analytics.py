@@ -61,6 +61,14 @@ def repeat_customer_rate(db,business_id):
     if not active: return 0
     return round(sum(1 for c in active if c.orders_count>1)/len(active)*100)
 
+def active_sales_days(db,business_id,days=30):
+    """Distinct calendar days inside the window with at least one logged sale.
+    Counts sale records rather than revenue, so a legitimately zero-value sale
+    still marks the day as active."""
+    sales=db.query(SaleTransaction).filter(SaleTransaction.business_id==business_id).all()
+    cutoff=days_ago(days-1)
+    return len({_d(s.date) for s in sales if _d(s.date)>=cutoff})
+
 def inventory_days_remaining(item):
     v=float(item.daily_velocity or 0)
     if v<=0: return None

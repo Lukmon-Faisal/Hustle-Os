@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import Base, engine
 from app import models  # noqa: F401
-from app.routers import businesses, sales, expenses, invoices, products, inventory, customers, suppliers, analytics, ai
+from app.routers import businesses, sales, expenses, invoices, products, inventory, customers, suppliers, analytics, ai, whatsapp
 
 app = FastAPI(title="Hustle OS API", version="0.2.0")
 
@@ -49,3 +49,4 @@ app.include_router(customers.router)
 app.include_router(suppliers.router)
 app.include_router(analytics.router)
 app.include_router(ai.router)
+app.include_router(whatsapp.router)
